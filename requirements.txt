@@ -1,0 +1,4 @@
+undetected-chromedriver
+selenium
+python-dotenv
+mysql-connector-python

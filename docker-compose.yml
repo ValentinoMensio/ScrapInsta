@@ -1,0 +1,9 @@
+version: '3.8'
+services:
+  scraper:
+    build: .
+    volumes:
+      - ./data:/data
+        # Persistir cookies
+    env_file:
+      - .env

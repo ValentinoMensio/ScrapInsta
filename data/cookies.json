@@ -1,0 +1,101 @@
+[
+    {
+        "domain": ".instagram.com",
+        "httpOnly": true,
+        "name": "rur",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "value": "\"VLL\\05473420956379\\0541777407354:01f779b3308de307c6643eaf4d879aad7dac123547d9fc8024acb41dd4e8109cf022c2ca\""
+    },
+    {
+        "domain": ".instagram.com",
+        "expiry": 1753647355,
+        "httpOnly": false,
+        "name": "ds_user_id",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "73420956379"
+    },
+    {
+        "domain": ".instagram.com",
+        "expiry": 1777407340,
+        "httpOnly": false,
+        "name": "ig_nrcb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "value": "1"
+    },
+    {
+        "domain": ".instagram.com",
+        "expiry": 1780431340,
+        "httpOnly": false,
+        "name": "mid",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "value": "aA_h6wAEAAHFL0m-zkeT9RznFdNn"
+    },
+    {
+        "domain": ".instagram.com",
+        "expiry": 1746476154,
+        "httpOnly": false,
+        "name": "wd",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "value": "1482x712"
+    },
+    {
+        "domain": ".instagram.com",
+        "expiry": 1777407345,
+        "httpOnly": true,
+        "name": "ig_did",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "value": "75122F13-02B0-4840-AB51-F6D099DEFAA5"
+    },
+    {
+        "domain": ".instagram.com",
+        "expiry": 1780431338,
+        "httpOnly": true,
+        "name": "datr",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "6uEPaLy16DtQ47W_zhMk-zKB"
+    },
+    {
+        "domain": ".instagram.com",
+        "expiry": 1780431355,
+        "httpOnly": false,
+        "name": "csrftoken",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "value": "FvhjW3LGG_qHsxYqe6VVU8"
+    },
+    {
+        "domain": ".instagram.com",
+        "expiry": 1777407345,
+        "httpOnly": true,
+        "name": "sessionid",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "value": "73420956379%3AdrTtb3eqwonphr%3A28%3AAYcqpmU-L8ZYc1bVSpDQAulGMJy37qTjbUfugbcBlA"
+    },
+    {
+        "domain": ".instagram.com",
+        "expiry": 1746476154,
+        "httpOnly": false,
+        "name": "dpr",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "1.296875"
+    }
+]
