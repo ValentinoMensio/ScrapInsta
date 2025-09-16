@@ -1,4 +1,16 @@
-undetected-chromedriver
-selenium
-python-dotenv
-mysql-connector-python
+# Dependencias principales para ScrapInsta4
+selenium==4.34.2
+selenium-stealth==1.0.6
+selenium-wire==5.1.0
+undetected-chromedriver==3.5.5
+beautifulsoup4==4.13.4
+requests==2.32.4
+mysql-connector-python==8.0.33
+openai==1.98.0
+python-dotenv==1.1.1
+
+# Utilidades adicionales
+certifi==2025.8.3
+charset-normalizer==3.4.2
+idna==3.10
+urllib3>=2.5.0
