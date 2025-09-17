@@ -139,4 +139,129 @@ debug.log
 __pycache__/
 .pytest_cache/
 .coverage
-htmlcov/ 
+htmlcov/
+
+# ScrapInsta4 específico
+# Archivos de configuración sensibles
+.env
+.env.local
+.env.production
+.env.staging
+*.env
+
+# Archivos de sesión y cookies
+data/cookies/*.json
+data/profiles/*/
+data/logs/*.log
+data/screenshots/
+data/downloads/
+
+# Archivos de base de datos locales
+*.db
+*.sqlite
+*.sqlite3
+scrapinsta.db
+
+# Archivos de Chrome/Chromium
+chrome_user_data/
+chromium_user_data/
+selenium_logs/
+geckodriver.log
+
+# Archivos de proxy
+proxy_config.json
+proxy_list.txt
+
+# Archivos de captcha
+captcha_images/
+captcha_solutions/
+
+# Archivos de backup
+backup/
+backups/
+*.backup
+*.bak
+
+# Archivos de test
+test_results/
+test_screenshots/
+test_data/
+
+# Archivos de Docker
+.dockerignore
+docker-compose.override.yml
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Archivos de IDE específicos
+.vscode/settings.json
+.vscode/launch.json
+.idea/workspace.xml
+.idea/tasks.xml
+*.sublime-project
+*.sublime-workspace
+
+# Archivos de Python específicos
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Archivos de distribución
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Archivos de testing
+.tox/
+.nox/
+.coverage
+.pytest_cache/
+cover/
+*.cover
+.hypothesis/
+
+# Archivos de documentación
+docs/_build/
+site/
+
+# Archivos de Jupyter
+.ipynb_checkpoints
+
+# Archivos de mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Archivos de Pyre type checker
+.pyre/
+
+# Archivos de pytype static type analyzer
+.pytype/
+
+# Archivos de Cython debug symbols
+cython_debug/
+
+# Archivos de profiling
+.prof 

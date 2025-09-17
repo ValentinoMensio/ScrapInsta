@@ -1,8 +1,8 @@
-# ScrapInsta4 - Herramienta Avanzada de Scraping para Instagram
+# ScrapInsta4 - Herramienta de Scraping para Instagram
 
 ## 📋 Descripción
 
-ScrapInsta4 es una herramienta profesional de scraping para Instagram que permite automatizar tareas como obtener seguidores, analizar perfiles y enviar mensajes de forma masiva. Está diseñada con **arquitectura modular**, **procesamiento concurrente mediante múltiples workers** y un **sistema de router inteligente** para distribuir las tareas de manera balanceada entre los workers disponibles.
+ScrapInsta4 es una herramienta profesional de scraping para Instagram que permite automatizar tareas como obtener seguidores, analizar perfiles y enviar mensajes de forma masiva. Está diseñada con **arquitectura modular**, **procesamiento concurrente mediante múltiples workers** y un **sistema de router inteligente** para distribuir las tareas de manera balanceada.
 
 ### ✨ Características Principales
 
@@ -17,96 +17,54 @@ ScrapInsta4 es una herramienta profesional de scraping para Instagram que permit
 
 ## 🏗️ Arquitectura del Sistema
 
-#### 🎯 **Router (Balanceador de Carga)**
+### 🎯 **Router (Balanceador de Carga)**
 - **Token Bucket Algorithm** para rate limiting
 - **Round-robin** con fairness real
 - **Gestión de colas** por worker
 - **Mapeo de tareas** para seguimiento
 
-#### 👷 **Workers (Procesadores)**
+### 👷 **Workers (Procesadores)**
 - **Procesamiento paralelo** de tareas
 - **Gestión de sesiones** independiente
 - **Manejo de errores** robusto
 - **Comunicación asíncrona** con el router
 
-#### 🗄️ **Base de Datos**
+### 🗄️ **Base de Datos**
 - **MySQL** para persistencia
+- **Connection pooling** para optimización
 - **Tablas optimizadas** con índices
 - **Gestión de conexiones** segura
-- **Backup automático** de datos
+
+### ⚡ **Sistema de Excepciones**
+- **Excepciones personalizadas** por categoría
+- **Manejo específico** de errores de DB, Selenium, validación
+- **Logging detallado** con contexto
+- **Recuperación automática** para errores recuperables
+
+### 🔒 **Validación de Datos**
+- **Esquemas Pydantic** para validación robusta
+- **Validación de perfiles** de Instagram
+- **Validación de tareas** del sistema
+- **Validación de followings** y datos de DB
 
 ## 📁 Estructura del Proyecto
 
-### 📂 Directorios Principales
-
-#### `/src/` - Código fuente principal
-- **`main.py`** - Punto de entrada principal que coordina workers y router
-- **`__init__.py`** - Archivo de inicialización del paquete
-
-##### `/src/core/worker/` - Sistema de Workers
-- **`instagram_worker.py`** - Lógica principal del worker de Instagram
-- **`router.py`** - Router inteligente para balanceo de carga
-- **`task_handlers.py`** - Manejadores de cada tipo de tarea
-- **`messages.py`** - Definición de tipos de mensajes
-- **`__init__.py`**
-
-##### `/src/core/auth/` - Gestión de Autenticación
-- **`session_controller.py`** - Controlador de sesiones de Instagram
-- **`cookie_manager.py`** - Gestión de cookies y sesiones
-- **`login.py`** - Login automático y validación de sesión
-- **`__init__.py`**
-
-##### `/src/core/browser/` - Gestión del Navegador
-- **`driver_manager.py`** - Configuración avanzada de WebDriver
-- **`proxy_extension.py`** - Extensiones y configuración de proxies
-- **`__init__.py`**
-
-##### `/src/core/profile/` - Análisis de Perfiles
-- **`evaluator.py`** - Evaluación de perfiles (engagement, success_score)
-- **`fetch_profile.py`** - Obtención de datos de perfiles
-- **`fetch_followings.py`** - Obtención de listas de seguidos
-- **`send_message.py`** - Envío de mensajes automáticos
-- **`__init__.py`**
-- **`utils/`** - Funciones auxiliares:
-  - `text_analysis.py` - Análisis de texto
-  - `reels.py` - Procesamiento de reels (metricas)
-  - `basic_stats.py` - Estadísticas básicas
-  - `detection.py` - Detección de restricciónes
-  - `__init__.py`
-
-##### `/src/core/resources/` - Gestión de Recursos
-- **`resource_manager.py`** - Gestión de recursos y límites
-- **`__init__.py`**
-
-##### `/src/core/utils/` - Utilidades
-- **`undetected.py`** - Utilidades anti detección de bots
-- **`selenium_helpers.py`** - Helpers para Selenium
-- **`parse.py`** - Utilidades de parsing
-- **`chatgpt.py`** - Integración con ChatGPT
-- **`humanize_helpers.py`** - Helpers de humanización
-- **`__init__.py`**
-
-#### `/src/config/` - Configuración
-- **`settings.py`** - Configuración principal
-- **`accounts.json`** - Lista de cuentas del sistema
-- **`keywords.json`** - Palabras clave para análisis
-- **`account_utils.py`** - Utilidades de cuentas
-- **`config.py`** - Configuración adicional
-- **`__init__.py`**
-
-#### `/src/db/` - Base de Datos
-- **`init_db.py`** - Inicialización de la base de datos
-- **`repositories.py`** - Repositorios de datos
-- **`connection.py`** - Gestión de conexiones
-- **`__init__.py`**
-
-### 📂 Directorios de Datos
-
-#### `/data/`
-- **`profiles/`** - Datos de perfiles analizados
-- **`cookies/`** - Cookies de sesión persistentes
-
----
+```
+src/
+├── main.py                    # Punto de entrada principal
+├── core/
+│   ├── worker/               # Sistema de Workers
+│   ├── auth/                 # Gestión de Autenticación
+│   ├── browser/              # Gestión del Navegador
+│   ├── profile/              # Análisis de Perfiles
+│   ├── resources/             # Gestión de Recursos
+│   └── utils/                # Utilidades
+├── config/                   # Configuración
+├── db/                       # Base de Datos
+├── exceptions/               # Sistema de Excepciones
+├── schemas/                  # Validación de Esquemas
+└── utils/                    # Utilidades Generales
+```
 
 ## 🚀 Instalación y Configuración
 
@@ -171,27 +129,7 @@ python src/db/init_db.py
 }
 ```
 
-#### 2. **Ajustar Configuración (`src/config/settings.py`)**
-```python
-# Configuración de Instagram
-INSTAGRAM_CONFIG = {
-    'target_profile': 'perfil_objetivo',
-    'max_followings': 1000,
-    'cookie_refresh_interval': 15,  # minutos
-}
-
-# Configuración de Rate Limiting
-BROWSER_CONFIG = {
-    'timeouts': {
-        'page_load': 90,
-        'script': 30,
-        'implicit': 2,
-        'explicit': 20
-    }
-}
-```
-
-#### 3. **Configurar Variables de Entorno**
+#### 2. **Configurar Variables de Entorno**
 
 **Crear archivo .env:**
 ```bash
@@ -209,15 +147,15 @@ MYSQL_USER=scrapinsta
 MYSQL_PASSWORD=tu_password_mysql
 MYSQL_DATABASE=scrapinsta_db
 
+# Configuración del Pool de Conexiones
+MYSQL_POOL_SIZE=10
+MYSQL_CONNECTION_TIMEOUT=60
+
 # Configuración de Instagram
 INSTAGRAM_TARGET_PROFILE=perfil_objetivo
 INSTAGRAM_MAX_FOLLOWINGS=1000
 INSTAGRAM_COOKIE_REFRESH_INTERVAL=15
 ```
-
-**⚠️ Importante:** 
-- El archivo `.env` contiene información sensible y NO debe subirse al repositorio
-- Usa `.env.example` como plantilla para configurar tu `.env` local
 
 ### Ejecución
 
@@ -237,8 +175,6 @@ docker run -v $(pwd)/data:/data scrapinsta4
 # O usar docker-compose
 docker-compose up
 ```
-
----
 
 ## 🔧 Funcionalidades Principales
 
@@ -274,14 +210,6 @@ docker-compose up
 - ✅ **Renovación de sesiones** automática
 - ✅ **Gestión de proxies** (opcional)
 
-### 6. **Base de Datos MySQL**
-- ✅ **Tabla `filtered_profiles`** - Perfiles analizados
-- ✅ **Tabla `followings`** - Relaciones de seguimiento
-- ✅ **Índices optimizados** para consultas rápidas
-- ✅ **Gestión de conexiones** segura
-
----
-
 ## 🛡️ Características de Seguridad
 
 ### **Bypass de Detección**
@@ -296,14 +224,6 @@ docker-compose up
 - ✅ **Backoff exponencial** en caso de errores
 - ✅ **Pausas inteligentes** entre requests
 
-### **Gestión de Recursos**
-- ✅ **Límites de memoria** por worker
-- ✅ **Timeouts configurables** para todas las operaciones
-- ✅ **Cleanup automático** de recursos
-- ✅ **Monitoreo de salud** de workers
-
----
-
 ## 📊 Monitoreo y Logging
 
 ### **Sistema de Logs Avanzado**
@@ -317,42 +237,52 @@ docker-compose up
 - ✅ **Tiempo de ejecución** por tarea
 - ✅ **Errores y reintentos** por worker
 - ✅ **Estado de la base de datos**
----
 
-## 🐳 Docker y Despliegue
+## 🚀 **Mejoras Implementadas (v2.0)**
 
-### **Dockerfile Optimizado**
-```dockerfile
-FROM python:3.9-slim
-# Instalación de Chrome y dependencias
-# Configuración de Xvfb para headless
-# Optimizaciones de seguridad
-```
+### ⚡ **Sistema de Manejo Específico de Excepciones**
 
-### **Docker Compose**
-```yaml
-version: '3.8'
-services:
-  scraper:
-    build: .
-    volumes:
-      - ./data:/data
-    env_file:
-      - .env
-```
+#### **Excepciones Categorizadas:**
+- **`DatabaseExceptions`** - Errores de conexión, consultas, transacciones
+- **`SeleniumExceptions`** - Timeouts, elementos no encontrados, navegación
+- **`ValidationExceptions`** - Errores de validación de datos con Pydantic
+- **`BusinessExceptions`** - Lógica de negocio (perfiles privados, rate limits)
+- **`NetworkExceptions`** - Problemas de conectividad y API
 
-### **Variables de Entorno**
-```bash
-# .env
-OPENAI_API_KEY=tu_api_key_de_openai
-MYSQL_HOST=localhost
-MYSQL_USER=scrapinsta
-MYSQL_PASSWORD=4312
-MYSQL_DATABASE=scrapinsta_db
-INSTAGRAM_TARGET_PROFILE=perfil_objetivo
-INSTAGRAM_MAX_FOLLOWINGS=1000
-INSTAGRAM_COOKIE_REFRESH_INTERVAL=15
-```
+### 🛠️ **Connection Pooling para MySQL**
+
+#### **Optimizaciones de Base de Datos:**
+- ✅ **Pool de conexiones** - Reutilización eficiente de conexiones
+- ✅ **Gestión automática** - Context managers para manejo seguro
+- ✅ **Configuración flexible** - Tamaño de pool y timeouts configurables
+- ✅ **Manejo de errores** - Excepciones específicas para problemas de DB
+
+### 🔒 **Validación de Esquemas con Pydantic**
+
+#### **Esquemas Implementados:**
+- **`ProfileSchemas`** - Validación de perfiles de Instagram
+- **`TaskSchemas`** - Validación de tareas del sistema
+- **`DatabaseSchemas`** - Validación de datos de base de datos
+
+#### **Características:**
+- ✅ **Validación robusta** - Tipos, rangos, formatos
+- ✅ **Mensajes claros** - Errores de validación descriptivos
+- ✅ **Fallbacks seguros** - Valores por defecto para datos inválidos
+- ✅ **Filtrado inteligente** - Solo campos relevantes para cada contexto
+
+### 🔐 **Gestión Segura de Configuración**
+
+#### **Variables de Entorno:**
+- ✅ **API Keys** - OpenAI y otras APIs externas
+- ✅ **Base de Datos** - Credenciales y configuración de MySQL
+- ✅ **Instagram** - Configuración de scraping y rate limiting
+- ✅ **Pool de Conexiones** - Configuración de performance
+
+#### **Seguridad:**
+- ✅ **Archivo .env** - Configuración local no versionada
+- ✅ **Gitignore completo** - Protección de archivos sensibles
+- ✅ **Validación de configuración** - Verificación de valores requeridos
+
 ---
 
 **⚠️ Descargo de Responsabilidad:** El uso indebido de esta herramienta es responsabilidad del usuario. Los desarrolladores no se hacen responsables del mal uso de la aplicación.

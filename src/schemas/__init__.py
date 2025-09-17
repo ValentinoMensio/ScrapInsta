@@ -5,18 +5,24 @@ from .profile_schemas import (
     ProfileData,
     ProfileCreate,
     ProfileUpdate,
-    ProfileAnalysisResult
+    ProfileAnalysisResult,
+    ProfileEvaluation
 )
 from .task_schemas import (
     TaskData,
     AnalyzeTask,
     FetchFollowingsTask,
     SendMessageTask,
-    TaskResult
+    TaskResult,
+    WorkerStatus,
+    PoolStatus
 )
 from .database_schemas import (
     FollowingData,
-    FollowingCreate
+    FollowingCreate,
+    FollowingList,
+    DatabaseConfig,
+    PoolConfig
 )
 
 __all__ = [
@@ -25,6 +31,7 @@ __all__ = [
     'ProfileCreate', 
     'ProfileUpdate',
     'ProfileAnalysisResult',
+    'ProfileEvaluation',
     
     # Task schemas
     'TaskData',
@@ -32,8 +39,13 @@ __all__ = [
     'FetchFollowingsTask',
     'SendMessageTask',
     'TaskResult',
+    'WorkerStatus',
+    'PoolStatus',
     
     # Database schemas
     'FollowingData',
-    'FollowingCreate'
+    'FollowingCreate',
+    'FollowingList',
+    'DatabaseConfig',
+    'PoolConfig'
 ]

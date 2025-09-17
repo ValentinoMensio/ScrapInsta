@@ -1,5 +1,6 @@
 import time
 import itertools
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Optional
 from typing import TYPE_CHECKING
@@ -63,11 +64,25 @@ class TokenBucket:
 class Router:
     """
     Reparte tareas entre cuentas disponibles.
-    - Token bucket por cuenta para rate limit “suave”.
+    - Token bucket por cuenta para rate limit "suave".
     - Selección por menor inflight entre cuentas con token disponible (fairness real).
     - Mantiene mapping task_id -> (account, username, job_id).
+    - Thread-safe con locks para operaciones críticas.
     """
     def __init__(self, accounts: List[dict], worker_queues: Dict[str, "Queue"]):
+        # Validar entrada
+        if not accounts:
+            raise ValueError("No se proporcionaron cuentas")
+        
+        for account in accounts:
+            if not isinstance(account, dict) or 'username' not in account:
+                raise ValueError(f"Cuenta inválida: {account}")
+            if not account['username'] or not isinstance(account['username'], str):
+                raise ValueError(f"Username inválido en cuenta: {account}")
+        
+        if not worker_queues:
+            raise ValueError("No se proporcionaron colas de workers")
+        
         self.accounts = accounts
         self.worker_queues = worker_queues
         # Inflights visibles para fairness
@@ -80,6 +95,8 @@ class Router:
         self._rr = itertools.cycle([a["username"] for a in accounts])
         self.jobs: Dict[str, Job] = {}
         self.task_map: Dict[str, Dict] = {}  # task_id -> {account, username, job_id}
+        # Lock para operaciones críticas
+        self._lock = threading.Lock()
 
     def add_job(self, job: Job):
         self.jobs[job.job_id] = job
@@ -122,67 +139,71 @@ class Router:
 
     def dispatch(self):
         """Intenta despachar hasta un batch por job."""
-        for job in self.jobs.values():
-            if job.done or not job.pending:
-                continue
+        with self._lock:
+            for job in self.jobs.values():
+                if job.done or not job.pending:
+                    continue
 
-            dispatched = 0
-            to_send = list(itertools.islice(iter(job.pending), job.batch_size))
-            for username in to_send:
-                account = self._pick_account()
-                if not account:
-                    break  # sin tokens ahora; probá en el próximo tick
+                dispatched = 0
+                to_send = list(itertools.islice(iter(job.pending), job.batch_size))
+                for username in to_send:
+                    account = self._pick_account()
+                    if not account:
+                        break  # sin tokens ahora; probá en el próximo tick
 
-                # Asegurar unicidad de task_id: incluir job_id
-                task_id = f"{job.job_id}:{job.kind}:{username}"
-                task = {
-                    "id": task_id,
-                    "type": self._task_type_for(job),
-                    "profile": username,
-                }
-                if job.extra:
-                    task.update(job.extra)
-                self.worker_queues[account].put(task)
+                    # Asegurar unicidad de task_id: incluir job_id
+                    task_id = f"{job.job_id}:{job.kind}:{username}"
+                    task = {
+                        "id": task_id,
+                        "type": self._task_type_for(job),
+                        "profile": username,
+                    }
+                    if job.extra:
+                        task.update(job.extra)
+                    self.worker_queues[account].put(task)
 
-                self.task_map[task_id] = {"account": account, "username": username, "job_id": job.job_id}
-                self.inflight[account] = self.inflight.get(account, 0) + 1
-                job.pending.discard(username)
-                dispatched += 1
+                    # Operaciones atómicas bajo lock
+                    self.task_map[task_id] = {"account": account, "username": username, "job_id": job.job_id}
+                    self.inflight[account] = self.inflight.get(account, 0) + 1
+                    job.pending.discard(username)
+                    dispatched += 1
 
-            # Si ya no quedan pendientes, marcamos done solo si tampoco hay inflights activos del job
-            if not job.pending:
-                still = any(m.get("job_id") == job.job_id for m in self.task_map.values())
-                job.done = not still
+                # Si ya no quedan pendientes, marcamos done solo si tampoco hay inflights activos del job
+                if not job.pending:
+                    still = any(m.get("job_id") == job.job_id for m in self.task_map.values())
+                    job.done = not still
 
     def on_result(self, result: dict):
         """
         Llamar con cada mensaje del result_queue.
         Actualiza inflight y estado de jobs usando el mapeo guardado.
+        Thread-safe con locks.
         """
-        task_id = result.get("task_id")
-        meta = None
+        with self._lock:
+            task_id = result.get("task_id")
+            meta = None
 
-        if task_id and task_id in self.task_map:
-            meta = self.task_map.pop(task_id)
-            acc = meta["account"]
-            self.inflight[acc] = max(0, self.inflight.get(acc, 0) - 1)
+            if task_id and task_id in self.task_map:
+                meta = self.task_map.pop(task_id)
+                acc = meta["account"]
+                self.inflight[acc] = max(0, self.inflight.get(acc, 0) - 1)
 
-        # Detectar fin del job usando el job_id real desde meta o, si no está, parsear
-        job_id = None
-        if meta:
-            job_id = meta.get("job_id")
-        elif task_id:
-            # Fallback: intentar parsear "jobId:kind:username"
-            parts = task_id.split(":", 2)
-            if len(parts) >= 1:
-                job_id = parts[0]
+            # Detectar fin del job usando el job_id real desde meta o, si no está, parsear
+            job_id = None
+            if meta:
+                job_id = meta.get("job_id")
+            elif task_id:
+                # Fallback: intentar parsear "jobId:kind:username"
+                parts = task_id.split(":", 2)
+                if len(parts) >= 1:
+                    job_id = parts[0]
 
-        if job_id and job_id in self.jobs:
-            job = self.jobs[job_id]
-            if not job.pending:
-                still = any(m.get("job_id") == job_id for m in self.task_map.values())
-                if not still:
-                    job.done = True
+            if job_id and job_id in self.jobs:
+                job = self.jobs[job_id]
+                if not job.pending:
+                    still = any(m.get("job_id") == job_id for m in self.task_map.values())
+                    if not still:
+                        job.done = True
 
     def all_done(self) -> bool:
         return all(j.done for j in self.jobs.values())

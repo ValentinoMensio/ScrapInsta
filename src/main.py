@@ -72,7 +72,7 @@ def safe_db_read_followings(origin_username, limit):
                 logger.info(f"Se usaron {len(followings)} seguidores de la base de datos")
             return followings
     except Exception as e:
-        logger.error(f"Error al leer base de datos: {e}")
+        logger.error(f"Error al leer base de datos para {origin_username}: {e}")
         return []
 
 
@@ -104,6 +104,15 @@ def main():
         accounts = load_accounts()
         if not accounts:
             logger.error("No se encontraron cuentas en el archivo de configuración")
+            return
+
+        # Validar configuración crítica
+        if not INSTAGRAM_CONFIG.get('target_profile'):
+            logger.error("target_profile no configurado en INSTAGRAM_CONFIG")
+            return
+        
+        if not isinstance(INSTAGRAM_CONFIG.get('max_followings'), int) or INSTAGRAM_CONFIG['max_followings'] <= 0:
+            logger.error("max_followings debe ser un entero positivo")
             return
 
         logger.info(f"Iniciando {len(accounts)} workers...")
