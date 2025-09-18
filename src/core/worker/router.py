@@ -9,7 +9,8 @@ if TYPE_CHECKING:
     from queue import Queue  # Evitar import circular
 
 from core.worker.messages import (
-    TASK_FETCH_FOLLOWINGS, TASK_ANALYZE, TASK_SEND_MESSAGE
+    TASK_FETCH_FOLLOWINGS, TASK_ANALYZE, TASK_SEND_MESSAGE,
+    RES_ERROR, RES_FOLLOWINGS_FETCHED, RES_MESSAGE_SENT, RES_PROFILE_ANALYZED
 )
 
 
@@ -23,6 +24,10 @@ class Job:
     created_at: float = field(default_factory=time.time)
     done: bool = False
     extra: Optional[dict] = None
+
+    dispatched: int = 0
+    completed: int = 0
+    errors: int = 0
 
     def __post_init__(self):
         if not self.pending:
@@ -166,6 +171,8 @@ class Router:
                     self.task_map[task_id] = {"account": account, "username": username, "job_id": job.job_id}
                     self.inflight[account] = self.inflight.get(account, 0) + 1
                     job.pending.discard(username)
+                    
+                    job.dispatched += 1
                     dispatched += 1
 
                 # Si ya no quedan pendientes, marcamos done solo si tampoco hay inflights activos del job
@@ -200,6 +207,13 @@ class Router:
 
             if job_id and job_id in self.jobs:
                 job = self.jobs[job_id]
+                rtype = result.get("type")
+
+                if rtype == RES_ERROR:
+                    job.errors += 1
+                elif rtype in (RES_FOLLOWINGS_FETCHED, RES_PROFILE_ANALYZED, RES_MESSAGE_SENT):
+                    job.completed += 1
+
                 if not job.pending:
                     still = any(m.get("job_id") == job_id for m in self.task_map.values())
                     if not still:
@@ -207,3 +221,27 @@ class Router:
 
     def all_done(self) -> bool:
         return all(j.done for j in self.jobs.values())
+
+    def kpis(self) -> Dict[str, dict]:
+        """
+        KPIs agregados por tipo de job y totales.
+        Úsalo desde main para imprimir un resumen real (sin qsize()).
+        """
+        by_kind: Dict[str, dict] = {}
+        total = {"dispatched": 0, "completed": 0, "errors": 0, "jobs": 0}
+
+        for j in self.jobs.values():
+            k = j.kind
+            if k not in by_kind:
+                by_kind[k] = {"dispatched": 0, "completed": 0, "errors": 0, "jobs": 0}
+            by_kind[k]["dispatched"] += j.dispatched
+            by_kind[k]["completed"] += j.completed
+            by_kind[k]["errors"] += j.errors
+            by_kind[k]["jobs"] += 1
+
+            total["dispatched"] += j.dispatched
+            total["completed"] += j.completed
+            total["errors"] += j.errors
+            total["jobs"] += 1
+
+        return {"by_kind": by_kind, "total": total}

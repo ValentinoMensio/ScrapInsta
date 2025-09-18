@@ -37,7 +37,7 @@ class InstagramSessionManager:
 
 class InstagramWorker:
     def __init__(self, account=None, task_queue=None, result_queue=None, workers_ready=None,
-                 driver_manager=None):
+                 driver_manager=None, stop_event=None):
         self.account = account or {}
         self.task_queue = task_queue
         self.result_queue = result_queue
@@ -46,6 +46,8 @@ class InstagramWorker:
         self.worker_id = None
         self.driver_manager = driver_manager or DriverManager(self.account)
         self.session_manager = None
+        self.stop_event = stop_event
+        self._last_heartbeat = 0
 
     def _wrap_result(self, task, payload: dict) -> dict:
         payload.setdefault('task_id', task.get('id'))
@@ -116,34 +118,60 @@ class InstagramWorker:
                 'error': str(e),
             })
 
-
     def run(self, worker_id):
         self.worker_id = worker_id
 
         if not self.initialize():
-            logger.error("No se pudo inicializar el worker")
+            logger.error(f"[worker={self.worker_id}] No se pudo inicializar el worker")
             return
 
-        logger.info(f"Worker {worker_id} iniciado y listo para procesar tareas")
+        logger.info(f"[worker={self.worker_id}] Iniciado y listo para procesar tareas")
 
-        while True:
-            try:
-                task = self.task_queue.get(timeout=None)
-                if task is None:
-                    logger.info("Señal de terminación recibida")
+        try:
+            while True:
+                if self.stop_event is not None and self.stop_event.is_set():
+                    logger.info(f"[worker={self.worker_id}] stop_event recibido; saliendo…")
                     break
 
-                result = self.process_task(task)
-                self.result_queue.put(result)
+                try:
+                    task = self.task_queue.get(timeout=2)
+                except queue.Empty:
+                    # sin tarea: latido para monitoreo
+                    self._maybe_heartbeat()
+                    continue
 
-            except queue.Empty:
-                continue
-            except Exception as e:
-                self.result_queue.put(self._wrap_result({'type': task.get('type') if task else None}, {
-                'type': RES_ERROR,
-                'error': str(e)
-            }))
+                if task is None:
+                    logger.info(f"[worker={self.worker_id}] Señal de terminación recibida")
+                    break
+
+                try:
+                    result = self.process_task(task)
+                    self.result_queue.put(result)
+                except Exception as e:
+                    self.result_queue.put(self._wrap_result(
+                        {'type': task.get('type') if task else None},
+                        {'type': RES_ERROR, 'error': str(e)}
+                    ))
+                finally:
+                    self._maybe_heartbeat()
+        finally:
+            try:
+                self.driver_manager.cleanup()
+            except Exception:
+                pass
+            logger.info(f"[worker={self.worker_id}] Finalizado")
 
 
-        self.driver_manager.cleanup()
-        logger.info(f"Worker {worker_id} finalizado")
+    def _maybe_heartbeat(self):
+        # Enviar un “estoy vivo” cada 30s si no hubo resultados
+        now = time.time()
+        if now - self._last_heartbeat >= 30:
+            payload = self._wrap_result({'id': f'heartbeat:{self.worker_id}', 'type': 'heartbeat'}, {
+                'type': 'heartbeat',
+                'ok': True,
+            })
+            try:
+                self.result_queue.put(payload)
+            except Exception:
+                pass
+            self._last_heartbeat = now

@@ -1,11 +1,14 @@
 import time
 import logging
+import json
+import signal
 from logging.config import dictConfig
 from queue import Empty
-from multiprocessing import Process, Queue as MPQueue
+from multiprocessing import Process, Event, Queue as MPQueue
 from config.account_utils import load_accounts
 from config.settings import INSTAGRAM_CONFIG, LOGGING_CONFIG
 from db.connection import get_db_connection_context
+from core.worker.entry import worker_entry
 
 from core.worker.instagram_worker import InstagramWorker
 from core.worker.messages import (
@@ -24,19 +27,17 @@ logging.getLogger('seleniumwire').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-
-def start_workers(accounts, worker_queues, result_queue, workers_ready):
+def start_workers(accounts, worker_queues, result_queue, workers_ready, stop_event):
     """Arranca un worker por cuenta. Devuelve lista de procesos."""
     processes = []
     for idx, account in enumerate(accounts, start=1):
-        logger.info(f"Iniciando worker {idx} para cuenta {account['username']}")
-        worker = InstagramWorker(
-            account=account,
-            task_queue=worker_queues[account['username'].strip().lower()],
-            result_queue=result_queue,
-            workers_ready=workers_ready
+        uname = account['username'].strip().lower()
+        logger.info(f"Iniciando worker {idx} para cuenta {uname}")
+        p = Process(
+            target=worker_entry,
+            args=(idx, account, worker_queues[uname], result_queue, workers_ready, stop_event),
+            daemon=False
         )
-        p = Process(target=worker.run, args=(idx,))
         p.start()
         processes.append(p)
         logger.info(f"Worker {idx} (PID: {p.pid}) iniciado")
@@ -76,29 +77,59 @@ def safe_db_read_followings(origin_username, limit):
         return []
 
 
-def shutdown(processes, worker_queues, timeout=10):
+def shutdown(processes, worker_queues, timeout=10, stop_event=None):
     """Apagado amable y, si hace falta, forzoso."""
     logger.info("Enviando señal de terminación a los workers…")
+    if stop_event is not None:
+        stop_event.set()  # <— NEW
+
+    # Señal explícita por cola
     for q in worker_queues.values():
-        q.put(None)
+        try:
+            q.put(None)
+        except Exception:
+            pass
 
     for p in processes:
         p.join(timeout)
-    still_alive = [p for p in processes if p.is_alive()]
 
+    still_alive = [p for p in processes if p.is_alive()]
     if still_alive:
         logger.warning(f"Workers aún vivos tras {timeout}s: {[p.pid for p in still_alive]}. Terminando…")
         for p in still_alive:
-            p.terminate()
+            try:
+                p.terminate()
+            except Exception:
+                pass
         for p in still_alive:
-            p.join(5)
+            try:
+                p.join(5)
+            except Exception:
+                pass
+
+    # Cerrar colas (best-effort)
+    for q in worker_queues.values():
+        try:
+            q.close()
+            q.join_thread()
+        except Exception:
+            pass
 
     logger.info("Workers finalizados.")
+
 
 
 def main():
     processes = []
     worker_queues = {}
+    stop_event = Event()
+
+    def _handle_signal(signum, frame):
+        logger.warning(f"Señal recibida ({signum}); iniciando apagado…")
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
 
     try:
         accounts = load_accounts()
@@ -121,9 +152,10 @@ def main():
         result_queue = MPQueue()
         workers_ready = MPQueue()
 
-        processes = start_workers(accounts, worker_queues, result_queue, workers_ready)
+        processes = start_workers(accounts, worker_queues, result_queue, workers_ready, stop_event)
         if not wait_workers_ready(workers_ready, expected=len(accounts), timeout=600):
             logger.error("No todos los workers anunciaron readiness a tiempo")
+            stop_event.set()
             shutdown(processes, worker_queues)
             return
 
@@ -228,14 +260,10 @@ def main():
         h, m = divmod(m, 60)
         tstr = f"{h} h {m} min {s} s" if h else (f"{m} min {s} s" if m else f"{s} s")
         logger.info(f"✅ Flujo finalizado en {tstr}")
-        logger.info(f"Total de jobs procesados: {len(router.jobs)}")
-        logger.info(f"Total de inflights: {sum(router.inflight.values())}")
-        logger.info(f"Total de tareas despachadas: {sum(q.qsize() for q in worker_queues.values())}")
-        logger.info(f"Total de resultados en cola: {result_queue.qsize()}")
-        total_analyzed = sum(len(job.pending) for job in router.jobs.values() if job.kind == 'analyze')
-        logger.info(f"Total de perfiles analizados: {total_analyzed}")
-        total_with_rubro = sum(1 for job in router.jobs.values() if job.kind == 'analyze' and not job.done)
-        logger.info(f"Total de perfiles con coincidencia de rubro: {total_with_rubro}") 
+
+        kpis = router.kpis()  # <— usa los contadores reales del Router
+        logger.info("KPIs:\n" + json.dumps(kpis, ensure_ascii=False, indent=2))
+
 
     except KeyboardInterrupt:
         logger.warning("Interrumpido por el usuario (Ctrl+C)")
@@ -243,9 +271,10 @@ def main():
     finally:
         try:
             if processes and worker_queues:
-                shutdown(processes, worker_queues)
+                shutdown(processes, worker_queues, stop_event=stop_event)
         except Exception as e:
             logger.error(f"Error durante el apagado: {e}")
+
 
 
 if __name__ == "__main__":
