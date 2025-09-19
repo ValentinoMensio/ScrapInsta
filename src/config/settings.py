@@ -1,25 +1,52 @@
-"""
+'''
 Configuración centralizada para la aplicación
-"""
+'''
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-# Cargar variables de entorno desde .env
-load_dotenv()
+from pathlib import Path
+BASE_DIR = Path(__file__).resolve().parents[1]
+
+load_dotenv(find_dotenv())
+
+def _get_required(name: str) -> str:
+    v = os.getenv(name)
+    if not v:
+        raise RuntimeError(f'Variable {name} no configurada en .env')
+    return v
+
+def _get_int(name: str, default: int | None = None) -> int:
+    v = os.getenv(name)
+    if v is None:
+        if default is not None:
+            return default
+        raise RuntimeError(f'Variable {name} no configurada en .env')
+    try:
+        return int(v)
+    except ValueError:
+        raise RuntimeError(f'{name} debe ser entero. Recibido: {v!r}')
+
+def get_openai_api_key():
+    v = os.getenv("OPENAI_API_KEY")
+    if not v:
+        raise RuntimeError("OPENAI_API_KEY no configurado")
+    return v
+
+OPENAI_API_KEY = get_openai_api_key()
 
 # Configuración de Instagram
 INSTAGRAM_CONFIG = {
-    'target_profile': os.getenv('INSTAGRAM_TARGET_PROFILE', 'dra.natalipaz'),
-    'max_followings': int(os.getenv('INSTAGRAM_MAX_FOLLOWINGS', '12')),
-    'cookie_refresh_interval': int(os.getenv('INSTAGRAM_COOKIE_REFRESH_INTERVAL', '15')),  # minutos
+    'target_profile': _get_required('INSTAGRAM_TARGET_PROFILE'),
+    'max_followings': _get_int('INSTAGRAM_MAX_FOLLOWINGS', 12),
+    'cookie_refresh_interval': _get_int('INSTAGRAM_COOKIE_REFRESH_INTERVAL', 15),
 }
 
 BROWSER_CONFIG = {
     'user_agents': [
         # Chrome en Linux (solo Chromium-based)
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
         # Edge en Linux (también Chromium, opcional)
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0"
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0'
     ],
     'chrome_version': 137,
     'timeouts': {
@@ -29,8 +56,6 @@ BROWSER_CONFIG = {
         'explicit': 20
     }
 }
-
-
 
 # Configuración de reintentos
 RETRY_CONFIG = {
@@ -75,30 +100,23 @@ LOGGING_CONFIG = {
     },
 }
 
-
-# Configuración de API Keys
-OPEN_AI_API_KEY = os.getenv('OPENAI_API_KEY')
-
 # Configuración de Base de Datos
 DATABASE_CONFIG = {
-    'host': os.getenv('MYSQL_HOST', 'localhost'),
-    'user': os.getenv('MYSQL_USER', 'scrapinsta'),
-    'password': os.getenv('MYSQL_PASSWORD', '4312'),
-    'database': os.getenv('MYSQL_DATABASE', 'scrapinsta_db')
+    "host": _get_required("MYSQL_HOST"),
+    "user": _get_required("MYSQL_USER"),
+    "password": _get_required("MYSQL_PASSWORD"),
+    "database": _get_required("MYSQL_DATABASE"),
+    "port": _get_int("MYSQL_PORT", 3306),
+    "charset": "utf8mb4",
+    "collation": "utf8mb4_unicode_ci",
+    "sql_mode": "TRADITIONAL",
+    "connection_timeout": _get_int("MYSQL_CONNECTION_TIMEOUT", 60),
 }
 
 # Configuración del Pool de Conexiones
 POOL_CONFIG = {
-    'pool_name': 'scrapinsta_pool',
-    'pool_size': int(os.getenv('MYSQL_POOL_SIZE', '10')),  # Número de conexiones en el pool
-    'pool_reset_session': True,  # Resetear sesión al devolver conexión al pool
-    'autocommit': True,  # Autocommit por defecto
-    'charset': 'utf8mb4',
-    'collation': 'utf8mb4_unicode_ci',
-    'time_zone': '+00:00',
-    'sql_mode': 'TRADITIONAL',
-    'raise_on_warnings': True,
-    'use_unicode': True,
-    'get_warnings': True,
-    'connection_timeout': int(os.getenv('MYSQL_CONNECTION_TIMEOUT', '60'))  # Timeout de conexión
-} 
+    "pool_name": "scrapinsta_pool",
+    "pool_size": _get_int("MYSQL_POOL_SIZE", 10),
+    "pool_reset_session": True,
+    "autocommit": True
+}

@@ -66,17 +66,17 @@ class DriverManager:
                             "Network.setExtraHTTPHeaders",
                             {"headers": {"Authorization": self.proxy_auth}}
                         )
-                        print("Cabeceras de autenticación aplicadas vía CDP")
+                        logger.info("Cabeceras de autenticación aplicadas vía CDP")
                     except Exception as e:
-                        print(f"Error aplicando auth con CDP: {e}")
+                        logger.warning(f"Error aplicando auth con CDP: {e}")
 
                 # Verificación de IP pública
                 test_url = "https://api.ipify.org"
-                print(f"Abriendo {test_url} para verificar IP pública...")
+                logger.info(f"Abriendo {test_url} para verificar IP pública...")
                 driver.get(test_url)
                 WebDriverWait(driver, 10).until(lambda d: d.find_element(By.TAG_NAME, "body"))
                 ip = driver.find_element(By.TAG_NAME, "body").text.strip()
-                print(f"IP pública detectada por Selenium: {ip}")
+                logger.info(f"IP pública detectada por Selenium: {ip}")
 
                 # Evasión básica
                 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -141,10 +141,11 @@ class DriverManager:
         options.add_argument("--disable-features=TranslateUI")
         options.add_argument("--ignore-certificate-errors")
         options.add_argument("--window-size=1280,800")
+        options.add_argument("blink-settings=imagesEnabled=false")
         options.headless = False
 
         ua = choose_and_apply_user_agent(options, BROWSER_CONFIG, stable_key=username)
-        print(f"User-Agent configurado: {ua}")
+        logger.info(f"User-Agent configurado: {ua}")
 
         proxy = self.account.get('proxy')
         if proxy:
@@ -160,7 +161,7 @@ class DriverManager:
                     },
                     'disable_capture': True
                 }
-                print(f"Proxy configurado: {proxy_user}@{proxy_host}:{proxy_port}")
+                logger.info("Proxy configurado: %s:%s (user=***, pass=***)", proxy_host, proxy_port)
             else:
                 self.seleniumwire_options = {
                     'proxy': {
@@ -170,7 +171,7 @@ class DriverManager:
                     },
                     'disable_capture': True
                 }
-                print(f"Proxy sin autenticación configurado: {proxy}")
+                logger.info(f"Proxy sin autenticación configurado: {proxy}")
 
         prefs = {
             "profile.default_content_setting_values.notifications": 2,

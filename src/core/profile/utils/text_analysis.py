@@ -1,11 +1,12 @@
 from typing import Optional
 from pathlib import Path
+from config.settings import BASE_DIR
 import json
 import re
 from unidecode import unidecode
 
-# Cargar keywords desde JSON
-with open(Path("src/config/keywords.json"), "r", encoding="utf-8") as f:
+KEYWORDS_PATH = BASE_DIR / "config" / "keywords.json"
+with KEYWORDS_PATH.open("r", encoding="utf-8") as f:
     keywords = json.load(f)
 
 DOCTOR_KEYWORDS = [unidecode(k.lower()) for k in keywords["doctor_keywords"]]

@@ -2,7 +2,7 @@ from openai import OpenAI
 from config import settings  # Assuming your API key is here
 
 
-client = OpenAI(api_key=settings.OPEN_AI_API_KEY)
+client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 def generate_custom_message(profile: dict) -> str:

@@ -2,7 +2,7 @@ import mysql.connector
 from mysql.connector import Error
 import logging
 # en src/db/init_db.py
-from src.config.settings import DATABASE_CONFIG
+from config.settings import DATABASE_CONFIG
 
 
 logger = logging.getLogger(__name__)
@@ -49,11 +49,11 @@ def connect_server():
 def create_database(cursor):
     try:
         cursor.execute(
-            f"CREATE DATABASE IF NOT EXISTS {DB_NAME} DEFAULT CHARACTER SET 'utf8mb4'"
+            f"CREATE DATABASE IF NOT EXISTS {DB_NAME} DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci;"
         )
-        print(f"✔ Base de datos `{DB_NAME}` verificada/creada.")
+        logger.info(f"✔ Base de datos `{DB_NAME}` verificada/creada.")
     except mysql.connector.Error as err:
-        print(f"! Error creando base de datos: {err}")
+        logger.error(f"! Error creando base de datos: {err}")
         exit(1)
 
 def drop_tables(cursor):
@@ -89,9 +89,9 @@ def create_tables(connection):
     for table_name, ddl in TABLES.items():
         try:
             cursor.execute(ddl)
-            print(f"✔ Tabla `{table_name}` verificada/creada.")
+            logger.info(f"✔ Tabla `{table_name}` verificada/creada.")
         except mysql.connector.Error as err:
-            print(f"! Error creando tabla `{table_name}`: {err}")
+            logger.error(f"! Error creando tabla `{table_name}`: {err}")
 
     cursor.close()
 
@@ -165,7 +165,7 @@ def init_database():
             conn.close()
 
 def main():
-    print("Inicializando base de datos...")
+    logging.info("Inicializando base de datos...")
     # Conexión inicial (sin base de datos)
     connection = connect_server()
     cursor = connection.cursor()
