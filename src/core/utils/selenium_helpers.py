@@ -26,7 +26,7 @@ def handle_save_login_info_popup(driver):
                 logger.info("Popup de 'Guardar información' - Clic en 'Ahora no'")
                 random_sleep(1.0, 2.0)
                 
-        except Exception as e:
+        except Exception:
             logger.debug("No se encontró popup de 'Guardar información' o no se pudo interactuar")
             
     except Exception as e:
@@ -55,7 +55,7 @@ def is_logged_in(driver):
                 )
                 logger.debug("Elementos de sesión activa encontrados - Usuario logueado")
                 return True
-            except Exception as e:
+            except Exception:
                 logger.debug("No se encontraron elementos de sesión activa")
                 return False
                 

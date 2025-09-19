@@ -9,11 +9,7 @@ from config.account_utils import load_accounts
 from config.settings import INSTAGRAM_CONFIG, LOGGING_CONFIG
 from db.connection import get_db_connection_context
 from core.worker.entry import worker_entry
-
-from core.worker.instagram_worker import InstagramWorker
 from core.worker.messages import (
-    TASK_FETCH_FOLLOWINGS,
-    TASK_ANALYZE,
     RES_FOLLOWINGS_FETCHED,
     RES_PROFILE_ANALYZED,
     RES_ERROR,
@@ -124,7 +120,7 @@ def main():
     worker_queues = {}
     stop_event = Event()
 
-    def _handle_signal(signum, frame):
+    def _handle_signal(signum):
         logger.warning(f"Señal recibida ({signum}); iniciando apagado…")
         stop_event.set()
 

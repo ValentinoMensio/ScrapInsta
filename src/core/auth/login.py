@@ -42,12 +42,12 @@ def login_instagram(driver, account):
         logger.info(f"Login exitoso para {account['username']}")
         return driver
         
-    except TimeoutException as e:
+    except TimeoutException:
         error_msg = f"Timeout esperando elementos de login para {account['username']}"
         logger.error(error_msg)
         raise InstagramLoginError(error_msg, account['username'], "timeout")
         
-    except NoSuchElementException as e:
+    except NoSuchElementException:
         error_msg = f"No se encontraron elementos de login para {account['username']}"
         logger.error(error_msg)
         raise InstagramLoginError(error_msg, account['username'], "element_not_found")

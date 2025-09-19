@@ -1,21 +1,18 @@
-from core.utils.parse import parse_number
 import logging
 from typing import Dict, Any, Optional, List
 from .connection import get_db_connection_context
 from utils.validation_helpers import (
-    validate_following_list,
     validate_profile_create,
     safe_validate_profile_data,
     log_validation_error
 )
-from utils.exception_handlers import handle_database_exceptions, log_exception_details
+from utils.exception_handlers import log_exception_details
 from schemas.database_schemas import FollowingList
-from schemas.profile_schemas import ProfileCreate
 from pydantic import ValidationError
 from exceptions.database_exceptions import (
-    DatabaseQueryError, DatabaseTransactionError, DatabaseValidationError
+    DatabaseQueryError
 )
-from exceptions.validation_exceptions import FollowingValidationError, ProfileValidationError
+from exceptions.validation_exceptions import FollowingValidationError
 
 logger = logging.getLogger(__name__)
 

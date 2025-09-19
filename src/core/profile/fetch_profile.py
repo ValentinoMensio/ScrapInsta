@@ -1,12 +1,11 @@
-import traceback
+import json
+import logging
 from selenium.webdriver.common.by import By
 from core.utils.undetected import random_sleep, random_mouse_movements
-import json
 from pathlib import Path
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
-import logging
+from selenium.common.exceptions import TimeoutException
 from typing import Dict, Any, Optional
 from .evaluator import evaluate_profile
 from core.profile.utils.reels import extract_reel_metrics
@@ -18,16 +17,12 @@ from core.profile.utils.detection import (
 from core.profile.utils.basic_stats import extract_basic_stats, extract_biography
 from core.profile.utils.text_analysis import detect_rubro
 from utils.validation_helpers import validate_username, validate_rubro, safe_validate_profile_data
-from utils.exception_handlers import handle_selenium_exceptions, log_exception_details
-from schemas.profile_schemas import ProfileAnalysisResult
-from pydantic import ValidationError
+from utils.exception_handlers import log_exception_details
 from exceptions.selenium_exceptions import (
-    SeleniumTimeoutError, SeleniumElementNotFoundError, SeleniumNavigationError
+    SeleniumElementNotFoundError, SeleniumNavigationError
 )
-from exceptions.business_exceptions import ProfilePrivateError, ProfileNotFoundError
+from exceptions.business_exceptions import ProfileNotFoundError
 from exceptions.validation_exceptions import ProfileValidationError
-
-import re
 
 with open(Path("src/config/keywords.json"), "r", encoding="utf-8") as f:
     keywords = json.load(f)
@@ -110,7 +105,7 @@ def analyze_profile(driver, username, max_profiles=50, has_session=True):
         try:
             driver.get(f"https://www.instagram.com/{username}/reels")
             random_sleep(2, 3)
-        except Exception as e:
+        except Exception:
             raise SeleniumNavigationError(
                 f"Error navegando al perfil {username}",
                 to_url=f"https://www.instagram.com/{username}/reels"

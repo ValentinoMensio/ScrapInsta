@@ -3,7 +3,7 @@ Manejadores específicos de excepciones para ScrapInsta4
 """
 import logging
 import traceback
-from typing import Optional, Dict, Any, Callable, Type
+from typing import Optional, Dict, Any, Callable
 from functools import wraps
 import mysql.connector
 from selenium.common.exceptions import (

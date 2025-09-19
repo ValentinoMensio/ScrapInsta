@@ -2,7 +2,6 @@ import logging
 import json
 import os
 from core.utils.undetected import random_sleep
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 

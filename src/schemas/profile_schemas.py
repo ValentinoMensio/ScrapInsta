@@ -3,7 +3,6 @@ Esquemas de validación para datos de perfiles de Instagram
 """
 from typing import Optional, Literal
 from pydantic import BaseModel, Field, validator
-from datetime import datetime
 
 
 class ProfileData(BaseModel):

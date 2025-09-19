@@ -7,9 +7,6 @@ from db.repositories import save_followings, save_profile_to_db
 from core.utils.selenium_helpers import is_logged_in
 from core.profile.send_message import send_message
 from core.worker.messages import (
-    TASK_ANALYZE,
-    TASK_FETCH_FOLLOWINGS,
-    TASK_SEND_MESSAGE,
     RES_PROFILE_ANALYZED,
     RES_FOLLOWINGS_FETCHED,
     RES_MESSAGE_SENT,
@@ -21,7 +18,6 @@ from utils.validation_helpers import (
     validate_send_message_task,
     log_validation_error
 )
-from schemas.task_schemas import AnalyzeTask, FetchFollowingsTask, SendMessageTask
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)

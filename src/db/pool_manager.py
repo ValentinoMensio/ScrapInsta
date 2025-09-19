@@ -4,13 +4,13 @@ Pool Manager para MySQL Connection Pooling
 import logging
 import threading
 from contextlib import contextmanager
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 import mysql.connector
 from mysql.connector import pooling, Error
 from config.settings import DATABASE_CONFIG, POOL_CONFIG
-from utils.exception_handlers import handle_database_exceptions, log_exception_details
+from utils.exception_handlers import log_exception_details
 from exceptions.database_exceptions import (
-    DatabaseConnectionError, DatabasePoolError, DatabaseQueryError
+    DatabaseConnectionError, DatabasePoolError
 )
 
 logger = logging.getLogger(__name__)

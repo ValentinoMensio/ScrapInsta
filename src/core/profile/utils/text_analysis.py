@@ -1,5 +1,4 @@
 from typing import Optional
-from pathlib import Path
 from config.settings import BASE_DIR
 import json
 import re

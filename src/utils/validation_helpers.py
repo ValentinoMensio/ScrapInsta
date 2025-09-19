@@ -2,9 +2,9 @@
 Funciones helper para validación de datos
 """
 import logging
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, ValidationError
-from schemas.profile_schemas import ProfileData, ProfileCreate, ProfileUpdate, ProfileAnalysisResult
+from schemas.profile_schemas import ProfileData, ProfileCreate, ProfileUpdate
 from schemas.task_schemas import TaskData, AnalyzeTask, FetchFollowingsTask, SendMessageTask, TaskResult
 from schemas.database_schemas import FollowingData, FollowingCreate, FollowingList
 
