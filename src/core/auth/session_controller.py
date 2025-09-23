@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from config.settings import INSTAGRAM_CONFIG
 from core.utils.undetected import random_sleep
-from core.auth.cookie_manager import load_cookies, save_cookies
+from core.auth.cookie_manager import load_cookies, save_cookies, has_sessionid
 from core.auth.login import login_instagram
 from core.utils.selenium_helpers import is_logged_in, handle_save_login_info_popup
 from selenium.webdriver.common.by import By
@@ -26,17 +26,19 @@ def initialize_session(driver, account, last_cookie_check):
 
     # Primero intentamos cargar cookies válidas, sin hacer driver.get aún
     if should_refresh_cookies(last_cookie_check):
-        try:
-            cookies_loaded = load_cookies(driver, account['username'])
-            if cookies_loaded:
-                driver.get("https://www.instagram.com/")
-                random_sleep(1.0, 2.0)
+        if has_sessionid(account['username']):
+            try:
+                if load_cookies(driver, account['username']):
+                    driver.get("https://www.instagram.com/")
+                    random_sleep(1.0, 2.0)
+                    if is_logged_in(driver):
+                        logger.info("Sesión verificada con cookies")
+                        return True, datetime.now()
+            except Exception as e:
+                logger.error(f"Error cargando cookies: {e}")
+        else:
+            logger.info("No hay sessionid válido: se intentará login manual")
 
-                if is_logged_in(driver):
-                    logger.info("Sesión verificada con cookies")
-                    return True, datetime.now()
-        except Exception as e:
-            logger.error(f"Error cargando cookies: {e}")
 
     # Si las cookies no funcionan o no hay, hacemos login manual
     try:
