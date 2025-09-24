@@ -22,20 +22,7 @@ from core.utils.humanize_helpers import (
 logger = logging.getLogger(__name__)
 
 FOLLOWING_DIALOG_XPATH = "//div[@role='dialog']"
-# En algunos perfiles la lista está en un div scrollable interno del modal
-SCROLLABLE_IN_DIALOG_JS = """
-const dlg = document.evaluate(arguments[0], document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-if (!dlg) return null;
-const nodes = dlg.querySelectorAll('div');
-for (const n of nodes) {
-  if (n.scrollHeight > n.clientHeight + 8) { return n; }
-}
-return null;
-"""
 
-PROFILE_LINKS_XPATH = (
-    "//div[@role='dialog']//a[contains(@href, '/') and not(contains(@href, 'explore'))]"
-)
 FOLLOWING_BUTTON_XPATH = "//a[contains(@href, '/following')]"
 
 # Ritmo humano (~18 acciones/min ≈ 1 acción cada ~3.3s con jitter)

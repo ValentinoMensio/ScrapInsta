@@ -66,7 +66,6 @@ def handle_analyze_profiles(driver, task, initialize_func, initialize_session_fu
             profile_result = analyze_profile(
                 driver=driver,
                 username=username,
-                max_profiles=None,
                 has_session=has_session
             )
 

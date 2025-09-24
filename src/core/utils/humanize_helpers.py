@@ -154,17 +154,6 @@ class HumanScheduler:
         self._next_ts = time.monotonic()
         self._current_backoff = 0.0
 
-    def note_soft_block(self):
-        """Call when you detect 429, unusual activity, or challenge."""
-        if self._current_backoff == 0.0:
-            self._current_backoff = self.backoff.base_seconds
-        else:
-            self._current_backoff = min(self._current_backoff * self.backoff.factor, self.backoff.max_seconds)
-        self._next_ts = time.monotonic() + self._current_backoff
-
-    def clear_backoff(self):
-        self._current_backoff = 0.0
-
     def wait_turn(self):
         now = time.monotonic()
         # respect backoff first

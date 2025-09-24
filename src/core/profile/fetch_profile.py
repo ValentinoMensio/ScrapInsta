@@ -71,7 +71,7 @@ def fetch_profile_from_reels(driver, username: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error extrayendo métricas de reels para {username}: {e}")
         return None
     
-def analyze_profile(driver, username, max_profiles=50, has_session=True):
+def analyze_profile(driver, username, has_session=True):
     """
     Analiza un perfil de Instagram y guarda sus datos si cumple con los criterios.
     El análisis se realiza de manera dinámica, deteniéndose cuando se determina
