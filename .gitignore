@@ -110,6 +110,14 @@ chromedriver.exe
 data/profiles/
 data/cookies/
 data/logs/
+data/proxy_ext/
+data/chrome_profiles/
+data/*.zip
+data/tmp/
+data/*.sqlite
+data/*.db
+
+
 
 # Archivos de configuración sensibles
 src/config/accounts.json

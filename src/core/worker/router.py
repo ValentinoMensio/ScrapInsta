@@ -6,7 +6,7 @@ import random
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Optional, Any, Tuple
+from typing import Dict, List, Set, Optional, Any
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
