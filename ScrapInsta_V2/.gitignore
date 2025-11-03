@@ -1,0 +1,68 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.log
+*.sqlite3
+
+# --- Entorno virtual ---
+.venv/
+env/
+venv/
+
+# --- Archivos de entorno ---
+.env
+.env.*
+
+# --- Secretos ---
+docker/secrets/instagram_accounts.json
+secrets/**
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# --- Archivos temporales ---
+*.bak
+*.tmp
+*.swp
+*.swo
+
+# --- Archivos del sistema ---
+.DS_Store
+Thumbs.db
+
+# --- Docker ---
+docker/*.pid
+*.pid
+*.sock
+
+# --- IDEs ---
+.vscode/
+.idea/
+
+# --- Datos de ejecución / depuración ---
+data/
+logs/
+chrome_debug.log
+
+# --- Datos locales de la app ---
+api.log
+dispatcher.log
+src/data/
+src/scrapinsta/infrastructure/browser/**/downloads/
+src/scrapinsta/infrastructure/browser/**/tmp/
+src/scrapinsta/infrastructure/browser/**/cache/
+
+# --- Pytest / cobertura ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Archivos de desarrollo personal ---
+res.md
+comandos
+*.local
+*.dev
+

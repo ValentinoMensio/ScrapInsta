@@ -1,0 +1,53 @@
+services:
+  db:
+    image: mysql:8.4
+    container_name: docker-db-1
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASS}
+    ports:
+      - "${DB_PORT:-3307}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: ["mysqld", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.app
+    container_name: docker-app-1
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ./.env
+    environment:
+      # Overrides para que, dentro del contenedor, use el servicio "db" y el puerto interno
+      DB_HOST: db
+      DB_PORT: 3306
+
+      SECRET_ACCOUNTS_PATH: /run/secrets/instagram_accounts
+      BROWSER_PROFILES_DIR: /home/scrapinsta/.cache/ScrapInsta/profiles
+      HEADLESS: "true"   # Cambiá a "false" si querés debug visual
+    volumes:
+      - ..:/home/scrapinsta/app:rw
+      - profiles_cache:/home/scrapinsta/.cache/ScrapInsta/profiles
+    shm_size: 1g
+    secrets:
+      - instagram_accounts
+
+volumes:
+  mysql_data:
+  profiles_cache:
+
+secrets:
+  instagram_accounts:
+    file: ./secrets/instagram_accounts.json

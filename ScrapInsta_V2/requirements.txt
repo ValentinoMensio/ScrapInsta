@@ -1,0 +1,17 @@
+pymysql==1.1.1
+selenium==4.27.1
+pydantic==2.12.0
+pydantic-settings==2.11.0
+pytest==8.3.3
+python-dotenv==1.0.1
+selenium-wire==5.1.0
+undetected-chromedriver==3.5.5
+blinker<1.8
+selenium-stealth==1.0.6
+openai==2.3.0  
+sqlalchemy==2.0.44
+setuptools==68.2.2
+boto3==1.40.55
+botocore==1.40.55
+fastapi==0.119.1
+uvicorn==0.38.0
