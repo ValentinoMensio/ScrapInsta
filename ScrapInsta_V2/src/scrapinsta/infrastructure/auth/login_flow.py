@@ -16,7 +16,6 @@ from selenium.common.exceptions import (
 from scrapinsta.infrastructure.auth.cookie_store import save_cookies, clear_cookies_file
 from scrapinsta.domain.ports.browser_port import BrowserAuthError
 
-# === Jitter humano, compatible con versión vieja (random_sleep) ===
 try:
     from scrapinsta.crosscutting.human.tempo import sleep_jitter as _hsleep
 except Exception:
@@ -136,18 +135,14 @@ def _paste_text(el, text: str) -> None:
     y luego escribe el texto completo de una vez (simula Ctrl+V).
     Más rápido y más realista que escribir carácter por carácter.
     """
-    # Hacer foco en el elemento
     el.click()
     _hsleep(0.05, 0.12)
     
-    # Seleccionar todo (Ctrl+A) - simula que vamos a reemplazar el contenido
     el.send_keys(Keys.CONTROL, "a")
     _hsleep(0.08, 0.15)
     
-    # Simular pegar: escribir el texto completo de una vez
-    # (Como no podemos acceder al portapapeles real, escribimos directamente)
     el.send_keys(text)
-    _hsleep(0.1, 0.2)  # Pequeña pausa para que el navegador procese el "pegado"
+    _hsleep(0.1, 0.2)
 
 
 def _locate_inputs(driver: WebDriver, wait_s: int) -> Tuple:
@@ -176,7 +171,6 @@ def _click_submit_fallbacks(driver: WebDriver, password_input, login_url: str) -
       - JS click directo.
     """
     tried = False
-    # B1) variantes de botón
     selectors: List[Tuple[str, str]] = [
         (By.XPATH, "//form//button[@type='submit']"),
         (By.XPATH, "//div//button[@type='submit']"),
@@ -194,24 +188,19 @@ def _click_submit_fallbacks(driver: WebDriver, password_input, login_url: str) -
         except Exception:
             continue
 
-    # B2) ENTER en password
     if not tried:
         try:
             password_input.send_keys(Keys.ENTER)
             tried = True
         except Exception:
             pass
-
-    # B3) JS click sobre cualquier submit visible
     if not tried:
         try:
             btn = driver.find_element(By.XPATH, "//button[@type='submit']")
             driver.execute_script("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();", btn)
         except Exception:
-            # último recurso: nada más que hacer aquí; el caller evaluará si seguimos en login
             pass
 
-    # pequeña espera para que la UI reaccione
     _hsleep(0.5, 1.0)
     try:
         WebDriverWait(driver, 15).until(
@@ -221,7 +210,6 @@ def _click_submit_fallbacks(driver: WebDriver, password_input, login_url: str) -
             )
         )
     except TimeoutException:
-        # caller decidirá reintentar según siga en pantalla de login
         pass
 
 
@@ -252,22 +240,19 @@ def login_instagram(
     success = False
 
     try:
-        # 1) Ir a /accounts/login
         driver.get(login_url)
         logger.debug("[auth] GET %s", login_url)
-        _hsleep(1.0, 2.0)  # estilo viejo: pequeña pausa antes de interactuar
+        _hsleep(1.0, 2.0)
         _accept_cookies_banner(driver)
 
-        # 2) Completar formulario simulando copiar y pegar
         user_input, pass_input = _locate_inputs(driver, wait_s)
         logger.debug("[auth] Inputs localizados (username/password)")
         user_input.clear(); pass_input.clear()
         _paste_text(user_input, username)
-        _hsleep(0.15, 0.3)  # Pausa entre campos
+        _hsleep(0.15, 0.3)
         _paste_text(pass_input, password)
-        _hsleep(0.15, 0.3)  # Pausa antes de submit
+        _hsleep(0.15, 0.3)
 
-        # 3) Intento de submit — Plan A (viejo)
         submit_attempts = 3
         for attempt in range(1, submit_attempts + 1):
             logger.debug("[auth] Submit try %d/%d (plan A)", attempt, submit_attempts)
@@ -277,7 +262,6 @@ def login_instagram(
                 logger.debug("[auth] Plan A click submit falló, probando fallbacks (detalle suprimido)")
                 _click_submit_fallbacks(driver, pass_input, login_url)
 
-            # Esperar reacción mínima
             _hsleep(0.6, 1.0)
             try:
                 WebDriverWait(driver, 18).until(
@@ -288,7 +272,6 @@ def login_instagram(
                     )
                 )
             except TimeoutException:
-                # Si no pasó nada visible, reintentar
                 continue
 
             banner = _extract_error_banner(driver)
@@ -298,15 +281,13 @@ def login_instagram(
                 raise BrowserAuthError(msg, username=username)
 
             if not _on_login_page(driver):
-                break  # salimos de login → continuar
+                break
 
-        # Si seguimos en login tras los intentos, es fallo
         if _on_login_page(driver):
             msg = "Login falló: permaneció en pantalla de login"
             logger.warning("[auth] %s (usuario=%s)", msg, username)
             raise BrowserAuthError(msg, username=username)
 
-        # 4) 2FA (si aparece)
         try:
             challenge = WebDriverWait(driver, 6).until(
                 EC.presence_of_element_located((By.XPATH, "//input[@name='verificationCode' or @name='otpCode']"))
@@ -330,7 +311,6 @@ def login_instagram(
         except TimeoutException:
             logger.debug("[auth] No se detectó flujo de 2FA (ok)")
 
-        # 5) Dismiss popups + verificación final
         _handle_save_login_info_popup(driver)
         driver.get(base_url)
         logger.debug("[auth] GET %s para verificación de sesión", base_url)
@@ -340,7 +320,6 @@ def login_instagram(
             logger.error("[auth] %s (usuario=%s)", msg, username)
             raise BrowserAuthError(msg, username=username)
 
-        # 6) Guardar cookies SOLO si login verificado
         save_cookies(driver, username)
         success = True
         logger.info("[auth] Login exitoso y cookies guardadas para %s", username)
@@ -351,7 +330,6 @@ def login_instagram(
         raise BrowserAuthError(msg, username=username) from e
 
     except BrowserAuthError:
-        # Re-lanzamos; el finally limpia cookies si no hubo éxito
         raise
 
     except Exception as e:

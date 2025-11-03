@@ -9,14 +9,9 @@ from typing import Any, Callable, Iterable, Optional, Tuple, Type, TypeVar, Lite
 
 from scrapinsta.config.settings import Settings
 
-# --------------------------------------------------------------------------------------
-# Logging
-# --------------------------------------------------------------------------------------
 _log = logging.getLogger("Scrapinsta.retry")
 
-# --------------------------------------------------------------------------------------
-# Tipos
-# --------------------------------------------------------------------------------------
+
 T = TypeVar("T")
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -39,7 +34,6 @@ class RetryError(RuntimeError):
         self.last_error = last_error
 
 
-# Excepción interna para soportar retry por resultado
 class _RetryByResult(RuntimeError):
     pass
 
@@ -102,12 +96,10 @@ def _compute_sleep(
 def retry(
     exceptions: Tuple[Type[BaseException], ...] | Type[BaseException] | Iterable[Type[BaseException]],
     *,
-    # Si alguno es None, se toma de Settings() en tiempo de llamada
     max_retries: Optional[int] = None,
     base_delay: Optional[float] = None,
     backoff: Optional[float] = None,
     jitter: Optional[float] = None,
-    # Mejoras opcionales (no rompen compat):
     jitter_strategy: JitterStrategy = "relative",
     max_elapsed: Optional[float] = None,
     retry_if_result: Optional[Callable[[Any], bool]] = None,
@@ -137,14 +129,12 @@ def retry(
     def decorator(func: F) -> F:
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Resolvemos política efectiva para esta invocación
             policy = _policy_from_settings()
             _max = int(max_retries if max_retries is not None else policy.max_retries)
             _base = float(base_delay if base_delay is not None else policy.base_delay)
             _back = float(backoff if backoff is not None else policy.backoff)
             _jit = float(jitter if jitter is not None else policy.jitter)
 
-            # Guardas
             _max = max(1, _max)
             _base = max(0.0, _base)
             _back = max(1.0, _back)
@@ -157,7 +147,6 @@ def retry(
                 try:
                     result = func(*args, **kwargs)
 
-                    # Soporte de retry por resultado
                     if retry_if_result and retry_if_result(result):
                         raise _RetryByResult("retry_if_result: resultado reintetable")
 
@@ -205,7 +194,7 @@ def retry(
                     )
                     sleep_fn(sleep_s)
 
-                except _RetryByResult as exc:  # tratado igual que excepciones reintetables
+                except _RetryByResult as exc:
                     last_exc = exc
                     if attempt >= _max:
                         _log.error(
@@ -244,17 +233,15 @@ def retry(
                     )
                     sleep_fn(sleep_s)
 
-            # No debería alcanzarse
             raise RetryError(f"Fallo inesperado en {getattr(func, '__name__', 'callable')}", last_error=last_exc)
 
-        return wrapper  # type: ignore[return-value]
+        return wrapper
 
     return decorator
 
 
 def retry_auto(
     *,
-    # Si alguno es None, se toma de Settings() en tiempo de llamada
     max_retries: Optional[int] = None,
     base_delay: Optional[float] = None,
     backoff: Optional[float] = None,
@@ -343,7 +330,6 @@ def retry_auto(
                     last_exc = exc
                     retryable = bool(getattr(exc, "retryable", False))
                     if not retryable:
-                        # No es reintetable: propagar
                         raise
 
                     if attempt >= _max:
@@ -385,10 +371,9 @@ def retry_auto(
                     )
                     sleep_fn(sleep_s)
 
-            # No debería alcanzarse
             raise RetryError(f"Fallo inesperado en {getattr(func, '__name__', 'callable')}", last_error=last_exc)
 
-        return wrapper  # type: ignore[return-value]
+        return wrapper
 
     return decorator
 
@@ -407,10 +392,6 @@ def retry_call(
     sleeper: Optional[Callable[[float], None]] = None,
     **kwargs: Any,
 ) -> T:
-    """
-    Versión funcional (no decorador) para ejecutar con retry.
-    Útil cuando la función no se controla o hay que parametrizar dinámicamente.
-    """
     wrapped = retry(
         exceptions=exceptions,
         max_retries=max_retries,

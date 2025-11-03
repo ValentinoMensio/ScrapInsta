@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable, Any, Dict, List, Optional

@@ -4,7 +4,6 @@ from typing import Optional, Callable, Tuple
 
 from scrapinsta.application.dto.tasks import TaskEnvelope, ResultEnvelope
 
-# Tipos de confirmación de mensaje (ACK/NACK) para backends tipo SQS
 AckFn = Callable[[], None]
 NackFn = Callable[[], None]
 

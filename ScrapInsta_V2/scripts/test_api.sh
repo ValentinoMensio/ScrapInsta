@@ -1,9 +1,5 @@
-#!/bin/bash
-# Script para probar la API de ScrapInsta
-
 set -e
 
-# Colores
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -24,7 +20,6 @@ fi
 
 API_URL=${API_URL:-"http://localhost:8000"}
 X_ACCOUNT=${X_ACCOUNT:-"scrapscrapiscraper"}
-# Nuevos: cliente y su clave (modo multi-cliente)
 CLIENT_ID=${CLIENT_ID:-"demo"}
 CLIENT_KEY=${CLIENT_KEY:-${API_KEY}}
 URL="${API_URL}"
@@ -69,7 +64,6 @@ if echo "$FETCH_JOB" | grep -q "job_id"; then
     if command -v jq >/dev/null 2>&1; then
         FETCH_JOB_ID=$(echo "$FETCH_JOB" | jq -r '.job_id')
     else
-        # Fallback sin jq: intentar Python y luego sed
         FETCH_JOB_ID=$(python3 - <<'PY' <<< "$FETCH_JOB"
 import sys, json
 try:

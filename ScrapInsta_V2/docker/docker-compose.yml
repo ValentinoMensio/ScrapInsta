@@ -30,7 +30,6 @@ services:
     env_file:
       - ./.env
     environment:
-      # Overrides para que, dentro del contenedor, use el servicio "db" y el puerto interno
       DB_HOST: db
       DB_PORT: 3306
 

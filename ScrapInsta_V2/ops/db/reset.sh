@@ -10,13 +10,12 @@ fi
 
 set -euo pipefail
 
-DB_CONTAINER="docker-db-1"          # ajustá si tu nombre difiere
+DB_CONTAINER="docker-db-1"
 SCHEMA_PATH="ops/db/schema.sql"
 
 echo "🧹 Reiniciando base de datos ScrapInsta..."
 echo "-----------------------------------------"
 
-# Copiar schema al contenedor (para no pipear desde el host)
 echo "📦 Copiando schema al contenedor..."
 docker cp "$SCHEMA_PATH" "$DB_CONTAINER:/schema.sql"
 
@@ -38,8 +37,6 @@ docker exec -i "$DB_CONTAINER" bash -lc '
 
 # Verificar tablas
 echo "🔍 Verificando tablas creadas..."
-# --- CORRECCIÓN ---
-# Usar 'root' (igual que los pasos anteriores) en lugar de '$MYSQL_USER'
 docker exec -i "$DB_CONTAINER" bash -lc '
   set -euo pipefail
   mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "SHOW TABLES;"

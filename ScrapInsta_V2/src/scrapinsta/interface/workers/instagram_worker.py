@@ -8,10 +8,9 @@ from typing import Callable, Optional
 from scrapinsta.application.dto.tasks import TaskEnvelope, ResultEnvelope
 from scrapinsta.application.services.task_dispatcher import TaskDispatcher
 
-# Intentamos importar la factory formal; si no existe aún, definimos un Protocolo mínimo
 try:
-    from scrapinsta.application.services.task_dispatcher import UseCaseFactory  # type: ignore
-except Exception:  # pragma: no cover
+    from scrapinsta.application.services.task_dispatcher import UseCaseFactory
+except Exception:
     from typing import Protocol
     class UseCaseFactory(Protocol):
         def create_analyze_profile(self): ...
@@ -69,7 +68,6 @@ class InstagramWorker:
             signal.signal(signal.SIGINT, self._on_stop_signal)   # Ctrl+C
             signal.signal(signal.SIGTERM, self._on_stop_signal)  # kill/termination
         except Exception:
-            # En algunos entornos (p.ej. threads/Windows) no aplica
             pass
 
     def _on_stop_signal(self, *_: object) -> None:
@@ -89,7 +87,6 @@ class InstagramWorker:
                     attempts=1,
                 ))
             except Exception:
-                # No detenemos el loop por fallar el heartbeat
                 logger.debug("[%s] heartbeat send failed", self._name, exc_info=True)
             self._last_hb = now
 
@@ -114,7 +111,7 @@ class InstagramWorker:
 
             pack = None
             try:
-                pack = self._receive(self._poll)  # ahora espera (env, ack, nack) o None
+                pack = self._receive(self._poll)
             except Exception as e:
                 logger.warning("[%s] receive() failed: %s", self._name, e, exc_info=True)
                 self._maybe_heartbeat()
@@ -124,12 +121,11 @@ class InstagramWorker:
                 self._maybe_heartbeat()
                 continue
 
-            env, ack, nack = pack  # <- NUEVO
+            env, ack, nack = pack
 
-            # Poison pill (convención)
             if getattr(env, "task", None) is None and getattr(env, "id", None) is None:
                 try:
-                    ack()  # confirmar poison pill
+                    ack() 
                 except Exception:
                     logger.debug("[%s] ack failed on poison pill", self._name, exc_info=True)
                 logger.info("[%s] poison pill received -> exiting", self._name)
@@ -137,12 +133,10 @@ class InstagramWorker:
 
             try:
                 result = self._dispatcher.dispatch(env)
-                # enviar resultado
                 try:
                     self._send(result)
                 except Exception as e:
                     logger.error("[%s] send() failed: %s", self._name, e, exc_info=True)
-                    # Si falló el envío del resultado, mejor no ACKear la tarea -> reentrega
                     try:
                         nack()
                     except Exception:
@@ -150,7 +144,6 @@ class InstagramWorker:
                     self._maybe_heartbeat()
                     continue
 
-                # En este punto, tarea procesada y resultado enviado -> ACK
                 try:
                     ack()
                 except Exception:
@@ -158,7 +151,6 @@ class InstagramWorker:
 
             except Exception as e:
                 logger.exception("[%s] dispatch failed: %s", self._name, e)
-                # Intentamos reportar error
                 try:
                     self._send(ResultEnvelope(
                         ok=False,
@@ -169,7 +161,6 @@ class InstagramWorker:
                     ))
                 except Exception:
                     logger.debug("[%s] send() of failure result also failed", self._name, exc_info=True)
-                # No ACK -> reentrega tras visibility timeout
                 try:
                     nack()
                 except Exception:

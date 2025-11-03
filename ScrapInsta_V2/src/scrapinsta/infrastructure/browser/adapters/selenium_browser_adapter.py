@@ -30,8 +30,6 @@ from scrapinsta.domain.ports.browser_port import (
     BrowserRateLimitError,
 )
 
-# Scrapers de página (única fuente de verdad para otras features)
-# ⬇️ apuntamos a la nueva carpeta pages/
 from scrapinsta.infrastructure.browser.pages import profile_page, reels_page
 
 logger = logging.getLogger(__name__)
@@ -53,29 +51,27 @@ class SeleniumBrowserAdapter(BrowserPort):
         *,
         scheduler: Optional[HumanScheduler] = None,
         rubro_detector: Optional[Callable[[str, Optional[str]], Optional[str]]] = None,
-        # Parámetros de followings
         read_usernames_js: Optional[str] = None,
         base_url: str = "https://www.instagram.com",
         wait_timeout: float = 10.0,
         small_pause: float = 0.30,
         small_jitter: float = 0.30,
         max_scrolls_without_growth: int = 5,
-        **_: object,  # tolera kwargs extra
+        **_: object,
     ) -> None:
         self.driver = driver
         self._sched = scheduler or HumanScheduler()
         self._rubro_detector = rubro_detector
 
-        # Followings
+
         self._read_usernames_js = read_usernames_js or self._default_read_usernames_js()
         self._base_url = base_url.rstrip("/")
         self._wait_timeout = float(wait_timeout)
         self._small_pause = float(small_pause)
         self._small_jitter = float(small_jitter)
         self._max_scrolls_no_growth = int(max_scrolls_without_growth)
-        self._scroll_step = 145  # px, ajustable dinámicamente según necesidad
+        self._scroll_step = 145 
 
-        # Hooks (se pueden parchear en tests si hace falta)
         self._open_profile: Callable[[str], None] = self.__open_profile_default
         self._open_following_modal: Callable[[], None] = self.__open_following_modal_default
         self._scroll_following_modal_once: Callable[[], None] = self.__scroll_following_modal_once_default
@@ -89,7 +85,6 @@ class SeleniumBrowserAdapter(BrowserPort):
             logger.debug("[browser] GET %s", url)
             self._sched.wait_turn()
             self.driver.get(url)
-            # Cerrar popup de login si aparece
             try:
                 profile_page.close_instagram_login_popup(self.driver, timeout=5)
             except Exception:
@@ -100,7 +95,7 @@ class SeleniumBrowserAdapter(BrowserPort):
 
     def _go_reels(self, username: str) -> None:
         """Navega a https://www.instagram.com/<username>/reels/ (con fallback por click en tab)."""
-        self._go_profile(username)  # partimos del perfil
+        self._go_profile(username)
 
         u = username.strip().lstrip("@").lower()
         reels_url = f"{self._base_url}/{u}/reels/"
@@ -129,9 +124,7 @@ class SeleniumBrowserAdapter(BrowserPort):
         if not username:
             return []
 
-        # 1) Ir al perfil y abrir modal
         self._open_profile(username)
-        # dwell inicial al abrir perfil para simular lectura humana
         self._sleep_human()
         self._open_following_modal()
 
@@ -141,10 +134,8 @@ class SeleniumBrowserAdapter(BrowserPort):
         scrolls_done = 0
         last_gain = 0
 
-        # Pausa corta para dejar cargar el contenido inicial
         self._sleep_human()
 
-        # 2) Bucle de lectura + scroll
         while len(unique) < max_followings:
             try:
                 batch = self._read_visible_usernames()
@@ -165,7 +156,6 @@ class SeleniumBrowserAdapter(BrowserPort):
                 if len(unique) >= max_followings:
                     break
 
-            # Si alcanzamos el límite, salir del bucle principal
             if len(unique) >= max_followings:
                 break
 
@@ -177,9 +167,7 @@ class SeleniumBrowserAdapter(BrowserPort):
                 no_growth = 0
                 last_gain = len(unique) - before
 
-            # Ajustar el tamaño del scroll según lo que falta
             remaining = max(0, max_followings - len(unique))
-            # si falta poco, usar paso corto; si falta mucho, avanzar más rápido
             self._scroll_step = 145 if remaining < 20 else 400
 
             try:
@@ -188,10 +176,7 @@ class SeleniumBrowserAdapter(BrowserPort):
                 self._sleep_human()
                 scrolls_done += 1
 
-            # Heurística: si el avance promedio por scroll ya no justifica seguir, cortamos
             avg_gain = last_gain if last_gain > 0 else 10
-            # número máximo de scrolls adicionales razonables para alcanzar el objetivo
-            # si ya hicimos más que eso y no llegamos, salimos para evitar scrolls innecesarios
             import math
             max_reasonable_scrolls = math.ceil(remaining / max(1, avg_gain))
             if scrolls_done >= max_reasonable_scrolls and remaining > 0:
@@ -296,12 +281,10 @@ class SeleniumBrowserAdapter(BrowserPort):
 
     @retry((WebDriverException,))
     def _read_visible_usernames(self) -> List[str]:
-        # Esperar presencia del modal para mayor estabilidad
         WebDriverWait(self.driver, self._wait_timeout).until(
             EC.presence_of_element_located((By.XPATH, FOLLOWING_DIALOG_XPATH))
         )
 
-        # Esperar a que haya al menos un link de usuario visible dentro del modal
         try:
             WebDriverWait(self.driver, self._wait_timeout).until(
                 lambda driver: len(driver.find_elements(By.XPATH, FOLLOWING_DIALOG_XPATH + "//a[@href]")) > 0
@@ -309,7 +292,6 @@ class SeleniumBrowserAdapter(BrowserPort):
         except TimeoutException:
             logger.warning("No se encontraron links en el modal después de esperar")
 
-        # Pequeña pausa adicional para asegurar que el contenido esté renderizado
         sleep_jitter(0.5, 0.3)
 
         try:
@@ -328,7 +310,6 @@ class SeleniumBrowserAdapter(BrowserPort):
                 s = x.strip().lstrip("@").lower()
                 if s and "/" not in s and " " not in s:
                     out.append(s)
-        # dedup preservando orden
         seen: Set[str] = set()
         uniq: List[str] = []
         for u in out:
@@ -348,13 +329,11 @@ class SeleniumBrowserAdapter(BrowserPort):
                 EC.element_to_be_clickable((By.XPATH, FOLLOWING_BUTTON_XPATH))
             )
             self._sched.wait_turn()
-            # Micro-interacción humana: mover el mouse apenas antes de hacer click
             try:
                 from selenium.webdriver import ActionChains
                 ActionChains(self.driver).move_to_element(btn).pause(0.2).perform()
             except Exception:
                 pass
-            # Pequeña probabilidad de micro-movimiento humano antes de click
             try:
                 import random
                 if random.random() < 0.25:
@@ -366,7 +345,6 @@ class SeleniumBrowserAdapter(BrowserPort):
             WebDriverWait(self.driver, self._wait_timeout).until(
                 EC.presence_of_element_located((By.XPATH, FOLLOWING_DIALOG_XPATH))
             )
-            # Dwell breve luego de abrir el modal
             sleep_jitter(0.45, 0.35)
         except TimeoutException as e:
             raise BrowserDOMError(f"opening following modal timed out: {e}") from e
@@ -374,7 +352,6 @@ class SeleniumBrowserAdapter(BrowserPort):
             raise BrowserDOMError(f"opening following modal failed: {e}") from e
 
     def __scroll_following_modal_once_default(self) -> None:
-        # Scrollea el contenedor correcto dentro del diálogo (no el body)
         try:
             self.driver.execute_script(
                 """
@@ -394,7 +371,6 @@ class SeleniumBrowserAdapter(BrowserPort):
                 int(self._scroll_step) if hasattr(self, "_scroll_step") else 145,
             )
         except Exception:
-            # No romper por errores de scroll; el bucle seguirá
             pass
 
     def __sleep_human_default(self) -> None:

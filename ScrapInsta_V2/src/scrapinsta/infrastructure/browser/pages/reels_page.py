@@ -148,7 +148,6 @@ def extract_reel_metrics_list(
         [{"url", "code", "views", "likes", "comments"}, ...]
     - Solo usa vistas y, tras hover humano, likes y comentarios.
     - Sin duración ni fecha.
-    - OPTIMIZADO: Navegación más rápida entre reels y verificación de hover acelerada.
     """
     sched = scheduler or HumanScheduler()
 

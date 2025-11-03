@@ -1,4 +1,3 @@
-# src/scrapinsta/application/services/task_dispatcher.py
 from __future__ import annotations
 
 import logging
@@ -7,12 +6,10 @@ from typing import Protocol, Callable, Any, Dict, Tuple
 
 from scrapinsta.application.dto.tasks import TaskEnvelope, ResultEnvelope
 
-# DTOs de casos de uso
 from scrapinsta.application.dto.profiles import AnalyzeProfileRequest
 from scrapinsta.application.dto.messages import MessageRequest
 from scrapinsta.application.dto.followings import FetchFollowingsRequest
 
-# Use cases
 from scrapinsta.application.use_cases.analyze_profile import AnalyzeProfileUseCase
 from scrapinsta.application.use_cases.send_message import SendMessageUseCase
 from scrapinsta.application.use_cases.fetch_followings import FetchFollowingsUseCase
@@ -31,9 +28,7 @@ class UseCaseFactory(Protocol):
 
 @dataclass(frozen=True)
 class _Route:
-    # parser convierte payload (dict) -> DTO del use case
     parser: Callable[[Dict[str, Any]], Any]
-    # builder obtiene la instancia del use case desde la factory
     builder: Callable[[UseCaseFactory], Any]
 
 
@@ -58,7 +53,6 @@ class TaskDispatcher:
     """
     Glue mínimo de aplicación:
     - Mapea task_name -> (DTO parser, use case)
-    - No conoce Selenium ni SQL; solo llama al use case
     """
 
     def __init__(self, factory: UseCaseFactory) -> None:
@@ -90,7 +84,6 @@ class TaskDispatcher:
         try:
             use_case = route.builder(self._factory)
             result = use_case(dto)
-            # Normalizamos a dict (los DTOs de respuesta son Pydantic)
             result_dict = result.model_dump() if hasattr(result, "model_dump") else dict(result or {})
             attempts = getattr(result, "attempts", 1)
             return ResultEnvelope(

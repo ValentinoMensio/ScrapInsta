@@ -16,7 +16,6 @@ RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add
     apt-get update && apt-get install -y --no-install-recommends google-chrome-stable && \
     rm -rf /var/lib/apt/lists/*
 
-# Usuario no-root + carpeta de perfiles
 RUN useradd -m scrapinsta && mkdir -p /home/scrapinsta/.cache/ScrapInsta/profiles
 USER scrapinsta
 WORKDIR /home/scrapinsta/app

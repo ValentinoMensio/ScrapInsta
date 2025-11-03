@@ -13,7 +13,6 @@ from scrapinsta.crosscutting.human.tempo import sleep_jitter
 
 logger = logging.getLogger(__name__)
 
-# Selectores con fallbacks razonables (2025-10)
 _BTN_MESSAGE_XPATHS = (
     "//button//div[normalize-space()='Message']",
     "//div[@role='button' and normalize-space()='Message']",

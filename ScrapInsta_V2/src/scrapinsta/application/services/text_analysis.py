@@ -14,7 +14,6 @@ KEYWORDS_PATH = BASE_DIR / "config" / "keywords.json"
 def _load_keywords() -> Dict[str, List[str]]:
     with KEYWORDS_PATH.open("r", encoding="utf-8") as f:
         data = json.load(f)
-    # Normalizamos todo a minúsculas y sin acentos una sola vez
     return {
         "doctor_keywords": [unidecode(k.lower()) for k in data.get("doctor_keywords", [])],
         "rubros": {
@@ -37,14 +36,11 @@ def detect_rubro(username: str, bio: Optional[str]) -> Optional[str]:
     username_norm = unidecode((username or "").strip().lower())
     bio_norm = unidecode((bio or "").strip().lower())
 
-    # Heurística doctores por prefijo de username
     if any(username_norm.startswith(key) for key in doctor_keys):
         return "Doctor"
 
-    # Búsqueda por palabras clave con coincidencia exacta
     for rubro, words in rubros.items():
         for w in words:
-            # límite por palabra: \b...\b para evitar "pan" en "panadero"
             if re.search(rf"\b{re.escape(w)}\b", bio_norm):
                 return rubro
 

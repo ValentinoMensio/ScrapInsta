@@ -4,13 +4,11 @@ from typing import Optional, Dict
 
 from scrapinsta.config.settings import Settings
 
-# Puertos
 from scrapinsta.domain.ports.browser_port import BrowserPort
 from scrapinsta.domain.ports.profile_repo import ProfileRepository
 from scrapinsta.domain.ports.followings_repo import FollowingsRepo
 from scrapinsta.domain.ports.message_port import MessageSenderPort, MessageComposerPort
 
-# Adapters (infra)
 from scrapinsta.infrastructure.browser.core.driver_provider import DriverProvider
 from scrapinsta.infrastructure.browser.adapters.selenium_browser_adapter import SeleniumBrowserAdapter
 from scrapinsta.infrastructure.auth.session_service import SessionService
@@ -25,7 +23,6 @@ from scrapinsta.infrastructure.ai.chatgpt_openai import OpenAIMessageComposer
 from scrapinsta.infrastructure.db.connection_provider import make_mysql_conn_factory
 from scrapinsta.crosscutting.rate_limit import SlidingWindowRateLimiter, RateLimitConfig
 
-# Use cases
 from scrapinsta.application.use_cases.analyze_profile import AnalyzeProfileUseCase
 from scrapinsta.application.use_cases.fetch_followings import FetchFollowingsUseCase
 from scrapinsta.application.use_cases.send_message import SendMessageUseCase
@@ -120,7 +117,6 @@ class FactoryImpl(UseCaseFactory):
             dm = self._ensure_driver()
             driver = dm.initialize_driver()
             base_sender = SeleniumMessageSender(driver=driver)
-            # Limitar 8–15 DMs por hora (aleatorio por arranque) y cooldown 10–40 min
             rng_key = hash(self._account) & 0xFFFFFFFF
             low, high = 8, 15
             per_hour = low + (rng_key % (high - low + 1))

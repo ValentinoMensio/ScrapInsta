@@ -4,10 +4,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Callable, TypeVar, Sequence, Optional, Tuple
 
-# DTOs de entrada/salida del caso de uso
 from scrapinsta.application.dto.profiles import AnalyzeProfileRequest, AnalyzeProfileResponse
 
-# Modelos de dominio
 from scrapinsta.domain.models.profile_models import (
     ProfileSnapshot,
     ReelMetrics,
@@ -15,11 +13,9 @@ from scrapinsta.domain.models.profile_models import (
     BasicStats,
 )
 
-# Puertos
 from scrapinsta.domain.ports.browser_port import BrowserPort, BrowserPortError
 from scrapinsta.domain.ports.profile_repo import ProfileRepository
 
-# Servicio de evaluación
 from scrapinsta.application.services.evaluator import evaluate_profile
 
 T = TypeVar("T")
@@ -66,6 +62,15 @@ def _apply_success_metrics(snapshot: ProfileSnapshot, basic: Optional[BasicStats
 
 
 class AnalyzeProfileUseCase:
+    """
+    Caso de uso para analizar un perfil de Instagram.
+    Flujo:
+        1. Obtiene snapshot del perfil.
+        2. Si es público, obtiene métricas de reels y posts.
+        3. Calcula estadísticas básicas y scores.
+        4. Guarda (si se provee repo) el snapshot y análisis en BD.
+        5. Retorna DTO con resultados.
+    """
     def __init__(
         self,
         browser: BrowserPort,
@@ -81,7 +86,6 @@ class AnalyzeProfileUseCase:
         username = req.username.strip().lstrip("@").lower()
         logger.info("AnalyzeProfile: start username=%s", username)
 
-        # Verificar si el usuario ya fue analizado recientemente (menos de 30 días)
         if self.profile_repo:
             last_analysis = self.profile_repo.get_last_analysis_date(username)
             if last_analysis:
@@ -90,7 +94,6 @@ class AnalyzeProfileUseCase:
                     if datetime.now(last_date.tzinfo) - last_date < timedelta(days=30):
                         logger.info("AnalyzeProfile: usuario %s analizado recientemente (%s), saltando", 
                                   username, last_analysis)
-                        # Retornar respuesta vacía indicando que se saltó
                         return AnalyzeProfileResponse(
                             snapshot=None, 
                             recent_reels=[], 
@@ -102,7 +105,6 @@ class AnalyzeProfileUseCase:
                     logger.warning("AnalyzeProfile: error parseando fecha de último análisis: %s", e)
 
         snapshot: ProfileSnapshot = self._retry(lambda: self.browser.get_profile_snapshot(username))
-        # el rubro puede seguir calculándose si lo usás en otra parte; no forma parte del DTO
         _ = self._retry(lambda: self.browser.detect_rubro(username, snapshot.bio))
 
         recent_reels: list[ReelMetrics] = []
@@ -124,9 +126,9 @@ class AnalyzeProfileUseCase:
         if req.fetch_reels:
             reels_result = self._retry(lambda: self.browser.get_reel_metrics(username, max_reels=req.max_reels))
             if isinstance(reels_result, tuple) and len(reels_result) == 2:
-                recent_reels, basic = reels_result  # type: ignore[assignment]
+                recent_reels, basic = reels_result
             else:
-                recent_reels = list(reels_result)  # type: ignore[assignment]
+                recent_reels = list(reels_result)
                 basic = _compute_basic_stats_from_reels(recent_reels)
 
         if req.fetch_posts:

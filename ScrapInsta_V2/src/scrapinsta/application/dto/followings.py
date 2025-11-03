@@ -22,7 +22,6 @@ class FetchFollowingsRequest(BaseModel):
         description="Cantidad máxima de followings a obtener",
     )
 
-    # Permitir poblar por nombre de campo y por alias (pydantic v2)
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     @field_validator("username")
@@ -44,15 +43,13 @@ class FetchFollowingsResponse(BaseModel):
     followings: List[str] = Field(..., description="Usernames recolectados")
     new_saved: int = Field(..., ge=0, description="Nuevos followings insertados")
     fetched_at: datetime = Field(default_factory=datetime.utcnow)
-    # Campo extensible para futuras fuentes (p.ej., 'selenium', 'api')
     source: str = Field(default="selenium", description="Origen del scraping")
 
-    # Pydantic v2
     model_config = ConfigDict(frozen=True)
 
     @model_validator(mode="before")
     @classmethod
-    def _normalize_limit_field(cls, data):  # type: ignore[override]
+    def _normalize_limit_field(cls, data):
         """
         Acepta tanto 'limit' como 'max_followings' en el payload y los normaliza a 'max_followings'.
         Si vienen ambos, prioriza 'max_followings'.
@@ -68,13 +65,11 @@ class FetchFollowingsResponse(BaseModel):
     @field_validator("owner")
     @classmethod
     def normalizar_owner(cls, v: str) -> str:
-        # Normaliza para coherencia con la capa de persistencia
         return v.strip().lower()
 
     @field_validator("followings", mode="before")
     @classmethod
     def normalizar_followings(cls, v: List[str]) -> List[str]:
-        # Normaliza cada username, preservando el orden (no dedup acá: ya se hace en adapter/repo)
         if not isinstance(v, list):
             return v
         out: List[str] = []

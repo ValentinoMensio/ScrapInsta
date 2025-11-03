@@ -5,7 +5,6 @@ import time
 import re
 from typing import Optional, Protocol
 
-# DTOs de transporte
 from scrapinsta.application.dto.messages import (
     MessageRequest,
     MessageResult,
@@ -13,7 +12,6 @@ from scrapinsta.application.dto.messages import (
 )
 from scrapinsta.domain.models.profile_models import ProfileSnapshot
 
-# Puertos de dominio
 from scrapinsta.domain.ports.browser_port import BrowserPort, BrowserPortError
 from scrapinsta.domain.ports.profile_repo import ProfileRepository
 from scrapinsta.domain.ports.message_port import (
@@ -24,7 +22,6 @@ from scrapinsta.domain.ports.message_port import (
     DMUnexpectedError,
 )
 
-# Crosscutting (reintentos)
 from scrapinsta.crosscutting.retry import retry_auto, RetryError
 
 logger = logging.getLogger(__name__)
@@ -35,10 +32,10 @@ class SendMessageUseCase:
     Caso de uso: envío de mensajes directos (DM) en Instagram.
 
     Flujo:
-      1. Obtener snapshot del perfil (BrowserPort)
-      2. Generar texto personalizado (MessageComposerPort)
-      3. Enviar DM (MessageSenderPort) con política de retry
-      4. Registrar resultado en repositorio (opcional)
+        1. Obtener snapshot del perfil (BrowserPort)
+        2. Generar texto personalizado (MessageComposerPort)
+        3. Enviar DM (MessageSenderPort) con política de retry
+        4. Registrar resultado en repositorio (opcional)
     """
 
     def __init__(

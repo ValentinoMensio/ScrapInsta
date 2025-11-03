@@ -40,7 +40,7 @@ class HumanScheduler:
         self._rng = random.Random(self.cfg.seed if self.cfg.seed is not None else time.time_ns())
         self._actions = 0
         self._next_ts = time.monotonic()
-        self._human_backoff: float = 0.0  # segundos extra por bloqueos percibidos
+        self._human_backoff: float = 0.0
 
     # ---------------------------
     # API pública

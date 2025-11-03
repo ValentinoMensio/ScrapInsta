@@ -318,8 +318,8 @@ def enqueue_followings(
             job_id=job_id,
             task_id=seed_task_id,
             correlation_id=job_id,
-            account_id=None,        # <-- fijamos la CUENTA del cliente (ID único)
-            username=target,                   # el “owner” del fetch es el target
+            account_id=None,
+            username=target,
             payload={"username": target, "limit": body.limit, "client_account": client_account},
         )
     except Exception as e:
@@ -360,7 +360,7 @@ class EnqueueAnalyzeRequest(BaseModel):
     usernames: List[str] = Field(default_factory=list)
     batch_size: int = Field(default=25, ge=1, le=200)
     priority: int = Field(default=5, ge=1, le=10)
-    extra: Optional[Dict[str, Any]] = None  # ej: flags de análisis
+    extra: Optional[Dict[str, Any]] = None
 
 class EnqueueAnalyzeResponse(BaseModel):
     job_id: str
@@ -409,12 +409,11 @@ def enqueue_analyze_profile(
                 job_id=job_id,
                 task_id=task_id,
                 correlation_id=job_id,
-                account_id=None,          # la cuenta bot la decide el Router
+                account_id=None,
                 username=u,
                 payload={"username": u, **(body.extra or {})},
             )
         except Exception:
-            # seguimos con el resto
             pass
 
     return EnqueueAnalyzeResponse(job_id=job_id, total_items=len(usernames))

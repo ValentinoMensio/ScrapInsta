@@ -1,20 +1,5 @@
 from __future__ import annotations
 
-"""
-Utilidades mínimas para sondear si el driver ya tiene una sesión activa
-de Instagram, evitando disparar el login UI cuando no es necesario.
-
-Diseño:
-- No asume nada del resto del sistema (no importa Settings ni cookie_store).
-- No persiste ni modifica cookies; sólo observa.
-- "Best effort": primero inspecciona cookies, luego intenta una heurística de DOM.
-
-Uso típico desde la factory o SessionService:
-    from scrapinsta.infrastructure.auth.session_probe import has_active_session_in_driver
-    if not has_active_session_in_driver(driver):
-        # cargar cookies y/o iniciar login interactivo
-"""
-
 import logging
 from typing import Optional
 
@@ -49,17 +34,14 @@ def _looks_like_login_page(driver, timeout: float) -> bool:
     """
     try:
         wait = WebDriverWait(driver, timeout)
-        # Presencia de input username o password es un buen indicador de pantalla de login
         login_username = wait.until(
             EC.presence_of_all_elements_located((By.NAME, "username"))
         )
         if login_username:
             return True
     except TimeoutException:
-        # No apareció el formulario en el tiempo dado -> probablemente NO sea la pantalla de login
         return False
     except WebDriverException:
-        # Errores transitorios de webdriver: no afirmar que es login
         logger.debug("session_probe: error sondando DOM login", exc_info=True)
         return False
     return False
@@ -83,20 +65,16 @@ def has_active_session_in_driver(
       - Es una heurística conservadora (preferimos no forzar login si ya hay sesión).
       - No levanta excepciones: ante dudas, intenta ser permisivo y devolver False sólo si vemos el login.
     """
-    # 1) Intentar llegar al home (no abortar por fallos transitorios)
     try:
         driver.get(base_url)
     except Exception:
         logger.debug("session_probe: error navegando a %s", base_url, exc_info=True)
 
-    # 2) Cookie de sesión
     if _has_session_cookie(driver):
         return True
 
-    # 3) ¿Se ve la pantalla de login?
+
     if _looks_like_login_page(driver, timeout=timeout_s):
         return False
 
-    # 4) Caso ambiguo: no vimos login, tampoco cookie conocida -> asumir NO activa
-    #    (podría ser un splash/landing; que el caller decida intentar cargar cookies).
     return False

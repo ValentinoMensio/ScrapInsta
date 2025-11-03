@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS profiles (
 
 CREATE INDEX ix_profiles_username ON profiles(username);
 
+
 -- =========================
 -- Traza de análisis
 -- =========================
@@ -44,10 +45,10 @@ CREATE TABLE IF NOT EXISTS `followings` (
   KEY `ix_followings_target` (`username_target`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+
 -- ============================================
 -- Job Store (persistencia de Jobs y Tasks)
 -- ============================================
-
 CREATE TABLE IF NOT EXISTS jobs (
   id            VARCHAR(64)  NOT NULL PRIMARY KEY,
   kind          VARCHAR(64)  NOT NULL,
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 
 -- =========================================================
 -- Tabla: job_tasks
@@ -85,9 +87,6 @@ CREATE TABLE job_tasks (
   UNIQUE KEY uk_task_id (task_id),
   UNIQUE KEY uk_job_username_account (job_id, username, account_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Retención sugerida (purga de tasks finalizadas viejas):
--- DELETE FROM job_tasks WHERE status IN ('ok','error') AND finished_at < NOW() - INTERVAL 90 DAY;
 
 
 -- =========================================================

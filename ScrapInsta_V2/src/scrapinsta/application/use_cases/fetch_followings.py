@@ -36,11 +36,11 @@ class FetchFollowingsUseCase:
     Caso de uso: obtiene los followings de un perfil y los persiste idempotentemente.
 
     Flujo:
-      1. Normaliza y valida el owner como VO (Username).
-      2. Usa BrowserPort.fetch_followings(owner, limit) → Iterable[Username].
-      3. Crea entidades de dominio (Following) y aplica dedup/clip.
-      4. Persiste con FollowingsRepo.save_for_owner(owner, followings).
-      5. Devuelve un DTO con los followings y cantidad de nuevos guardados.
+        1. Normaliza y valida el owner como VO (Username).
+        2. Usa BrowserPort.fetch_followings(owner, limit) → Iterable[Username].
+        3. Crea entidades de dominio (Following) y aplica dedup/clip.
+        4. Persiste con FollowingsRepo.save_for_owner(owner, followings).
+        5. Devuelve un DTO con los followings y cantidad de nuevos guardados.
     """
 
     def __init__(
@@ -55,25 +55,21 @@ class FetchFollowingsUseCase:
 
     def __call__(self, req: FetchFollowingsRequest) -> FetchFollowingsResponse:
         owner = Username(value=req.username)
-        limit = req.max_followings  # Acceso directo al atributo (más type-safe)
+        limit = req.max_followings
 
-        # Validación temprana del límite
         if limit is not None and limit <= 0:
             self._log.info("Límite inválido, retornando lista vacía", extra={"owner": owner.value, "limit": limit})
             return FetchFollowingsResponse(owner=owner.value, followings=[], new_saved=0)
 
         try:
-            # 1️⃣ Scrapeo desde el browser (Iterable[Username])
             start_time = time.time()
             targets = list(self._browser.fetch_followings(owner, limit))
             scraping_duration = time.time() - start_time
 
-            # Validación post-scraping
             if not isinstance(targets, list):
                 self._log.warning("BrowserPort no retornó lista válida", extra={"owner": owner.value, "type": type(targets)})
                 return FetchFollowingsResponse(owner=owner.value, followings=[], new_saved=0)
 
-            # Validar que son Username válidos
             for t in targets:
                 if not isinstance(t, Username):
                     self._log.error("BrowserPort retornó tipo inválido en targets", extra={
@@ -93,20 +89,16 @@ class FetchFollowingsUseCase:
                 "duration_sec": round(scraping_duration, 2)
             })
 
-            # 2️⃣ Relaciones e invariantes
-            # Construir Following con deduplicación y límite aplicado eficientemente
             rels = []
             seen = set()
             for t in targets:
                 if limit and len(rels) >= limit:
                     break
-                # Usar tuple para deduplicación eficiente
                 key = (owner.value, t.value)
                 if key not in seen:
                     rels.append(Following(owner=owner, target=t))
                     seen.add(key)
 
-            # 3️⃣ Persistencia idempotente
             inserted = self._repo.save_for_owner(owner, rels)
 
             self._log.info(
@@ -118,8 +110,6 @@ class FetchFollowingsUseCase:
                 },
             )
 
-            # 4️⃣ DTO de salida
-            # Obtener source del browser si está disponible, sino usar default
             source = getattr(self._browser, "source", "selenium")
             
             return FetchFollowingsResponse(
@@ -129,7 +119,6 @@ class FetchFollowingsUseCase:
                 source=source,
             )
 
-        # === Manejo de errores ===
         except (BrowserNavigationError, BrowserDOMError, BrowserRateLimitError):
             self._log.exception("Error de scraping", extra={"owner": owner.value, "limit": limit})
             raise
@@ -142,7 +131,6 @@ class FetchFollowingsUseCase:
             self._log.exception("Error inesperado del navegador", extra={"owner": owner.value})
             raise
 
-    # === Aliases de conveniencia ===
     def run(self, username_origin: str, max_followings: int = 100) -> FetchFollowingsResponse:
         req = FetchFollowingsRequest(username=username_origin, max_followings=max_followings)
         return self(req)

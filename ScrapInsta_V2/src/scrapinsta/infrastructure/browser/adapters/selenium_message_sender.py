@@ -11,9 +11,8 @@ from selenium.common.exceptions import (
     StaleElementReferenceException,
 )
 from selenium.webdriver.common.by import By
-    # type: ignore
-from selenium.webdriver.support import expected_conditions as EC  # type: ignore
-from selenium.webdriver.support.ui import WebDriverWait  # type: ignore
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.keys import Keys
 
 from scrapinsta.crosscutting.human.tempo import HumanScheduler, sleep_jitter
@@ -26,7 +25,6 @@ from scrapinsta.domain.ports.message_port import (
 )
 from scrapinsta.application.dto.messages import MessageRequest
 
-# 🔁 cambio principal: usar la nueva carpeta pages/
 from scrapinsta.infrastructure.browser.pages import profile_page
 
 logger = logging.getLogger(__name__)
@@ -92,11 +90,9 @@ class SeleniumMessageSender(MessageSenderPort):
             raise DMUnexpectedError("username vacío")
 
         try:
-            # Ritmo humano antes de cada gesto visible
             self._sched.wait_turn()
             self._open_profile(uname)
             self._sleep_short()
-            # Micro-scroll de calentamiento (naturalidad visual, rápido)
             try:
                 human_scroll(self.driver, total_px=600, duration=0.9, scheduler=self._sched)
             except Exception:

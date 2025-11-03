@@ -8,19 +8,11 @@ import re
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, NonNegativeInt, field_validator, model_validator
 
 
-# =========================
-# Enums de dominio
-# =========================
-
 class PrivacyStatus(str, Enum):
     public = "public"
     private = "private"
     unknown = "unknown"
 
-
-# =========================
-# Value Objects / métricas
-# =========================
 
 class ReelMetrics(BaseModel):
     """

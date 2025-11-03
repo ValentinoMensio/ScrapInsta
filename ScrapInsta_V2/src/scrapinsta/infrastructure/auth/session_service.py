@@ -82,12 +82,10 @@ class SessionService:
 
         logger.info("[%s] Iniciando login interactivo…", self._username)
 
-        # 1) Intento vía cookies (cookie-first)
         if self._try_cookies_first():
             logger.info("[%s] Sesión verificada con cookies", self._username)
             return
 
-        # 2) Login interactivo (si cookies no funcionaron o no existen)
         self._login_and_persist()
 
     # -----------------------------
@@ -103,24 +101,20 @@ class SessionService:
                 logger.debug("[%s] No hay sessionid válido en cookies", self._username)
                 return False
 
-            # Cargar cookies y verificar
             if not load_cookies(self._driver, self._username):
                 logger.debug("[%s] No se pudieron cargar cookies", self._username)
                 return False
 
-            # Navegar al home y verificar señales de sesión
             self._driver.get(self._base_url)
             if _is_logged_in(self._driver, timeout=10):
                 return True
 
             logger.debug("[%s] Cookies cargadas pero no se verificó sesión", self._username)
-            # Si llegamos aquí, las cookies no sirven: limpiar archivo para evitar loops
             clear_cookies_file(self._username)
             return False
 
         except Exception as e:
             logger.debug("[%s] Error usando cookies: %s", self._username, e, exc_info=True)
-            # Cualquier error de lectura/decode deja el archivo limpio
             try:
                 clear_cookies_file(self._username)
             except Exception:
@@ -141,8 +135,6 @@ class SessionService:
                 login_url=self._login_url,
                 two_factor_code_provider=self._two_factor_code_provider,
             )
-            # login_flow guarda cookies sólo si verifica sesión.
-            # Aun así, verificamos aquí por robustez:
             if not _is_logged_in(self._driver, timeout=10):
                 raise BrowserAuthError(
                     "No se pudo verificar sesión tras login",
@@ -150,7 +142,6 @@ class SessionService:
                 )
 
         except BrowserAuthError:
-            # Aseguramos no dejar cookies rotas (login_flow ya lo intenta también)
             try:
                 clear_cookies_file(self._username)
             except Exception:
@@ -158,7 +149,6 @@ class SessionService:
             raise
 
         except Exception as e:
-            # Cualquier excepción inesperada se normaliza a BrowserAuthError
             try:
                 clear_cookies_file(self._username)
             except Exception:

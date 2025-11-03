@@ -17,7 +17,6 @@ from selenium.common.exceptions import (
 from scrapinsta.domain.models.profile_models import ProfileSnapshot
 
 
-# Mantén tus helpers
 from scrapinsta.crosscutting.parse import parse_number, extract_number
 
 logger = logging.getLogger(__name__)
@@ -229,7 +228,6 @@ def get_profile_snapshot(driver: WebDriver, username: str, wait_seconds: int = 8
 
     # Extracciones robustas (reusan tus helpers actuales)
     stats = extract_basic_stats(driver) or {}
-    logger.debug(f"AAAAAAAAAAAAA3333333333333333333Estadísticas básicas extraídas: {stats}")
 
     
     # Aceptar legado 'following' → normalizar a 'followings'

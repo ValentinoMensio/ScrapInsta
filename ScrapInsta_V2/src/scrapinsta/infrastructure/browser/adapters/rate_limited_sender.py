@@ -31,7 +31,6 @@ class RateLimitedSender(MessageSenderPort):
         self._limiter = limiter
         self._max_wait = float(max_wait_s)
 
-    # API moderna
     def send_message(self, req: MessageRequest, text: str) -> bool:
         self._wait_for_slot()
         try:
@@ -43,7 +42,6 @@ class RateLimitedSender(MessageSenderPort):
             logger.warning("[rate_limit] DMTransientUIBlock -> cooldown %.0fs", dur)
             raise
 
-    # API histórica
     def send_direct_message(self, username: str, text: str) -> bool:
         self._wait_for_slot()
         try:
@@ -55,7 +53,6 @@ class RateLimitedSender(MessageSenderPort):
             logger.warning("[rate_limit] DMTransientUIBlock -> cooldown %.0fs", dur)
             raise
 
-    # ---------------------------
     def _wait_for_slot(self) -> None:
         start = time.time()
         while not self._limiter.allow_now():

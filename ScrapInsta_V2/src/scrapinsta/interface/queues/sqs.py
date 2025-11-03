@@ -50,7 +50,6 @@ class SqsTaskQueue(TaskQueuePort):
             "id": env.id,
             "correlation_id": env.correlation_id,
         })
-        # group por cuenta para ordenar
         group_id = env.account_id or "default"
         dedup_id = env.id or f"{env.task}:{int(time.time()*1000)}"
 
@@ -62,7 +61,6 @@ class SqsTaskQueue(TaskQueuePort):
         )
 
     def receive(self, timeout_s: float) -> Optional[tuple[TaskEnvelope, AckFn, NackFn]]:
-        # Unificamos timeout con long polling. SQS permite 0..20s
         wait = min(self._wait, int(max(0.0, timeout_s)))
         resp = self._sqs.receive_message(
             QueueUrl=self._queue_url,
@@ -79,7 +77,6 @@ class SqsTaskQueue(TaskQueuePort):
         try:
             payload = _json_loads(msg["Body"])
         except Exception:
-            # Si hubo un mensaje corrupto, lo descartamos (ACK) para no bloquear.
             self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=receipt)
             return None
 
@@ -95,7 +92,6 @@ class SqsTaskQueue(TaskQueuePort):
             self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=receipt)
 
         def _nack() -> None:
-            # No borramos; dejamos que expire visibility timeout.
             return None
 
         return (env, _ack, _nack)
@@ -131,7 +127,6 @@ class SqsResultQueue(ResultQueuePort):
         )
 
     def try_get_nowait(self) -> Optional[ResultEnvelope]:
-        # SQS no tiene "nowait". Implementamos un poll con WaitTimeSeconds=0
         resp = self._sqs.receive_message(
             QueueUrl=self._queue_url,
             MaxNumberOfMessages=1,
@@ -147,7 +142,6 @@ class SqsResultQueue(ResultQueuePort):
         try:
             payload = _json_loads(msg["Body"])
         except Exception:
-            # Si corrupto, borrar para no ciclar
             self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=receipt)
             return None
 
@@ -160,6 +154,5 @@ class SqsResultQueue(ResultQueuePort):
             correlation_id=payload.get("correlation_id"),
         )
 
-        # Confirmamos consumo (ACK)
         self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=receipt)
         return res

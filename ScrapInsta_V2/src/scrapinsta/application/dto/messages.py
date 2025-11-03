@@ -12,9 +12,8 @@ class MessageRequest(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     target_username: str = Field(..., min_length=2, max_length=30)
-    # Si viene message_text, se usa tal cual. Si no, el use case pedirá al composer (IA) que lo genere.
     message_text: Optional[str] = None
-    template_id: Optional[str] = None  # opcional para plantillas del composer
+    template_id: Optional[str] = None
     dry_run: bool = False
     max_retries: int = 3
     
@@ -22,10 +21,9 @@ class MessageRequest(BaseModel):
     @classmethod
     def validate_username(cls, v: str) -> str:
         """Validar formato de username de Instagram."""
-        # Instagram permite: a-z, A-Z, 0-9, punto (.), underscore (_)
         if not re.match(r'^[a-zA-Z0-9._]{2,30}$', v):
             raise ValueError("Username inválido para Instagram (solo a-z, 0-9, ., _)")
-        return v.lower()  # normalizar a lowercase
+        return v.lower()
     
     @field_validator("message_text")
     @classmethod
@@ -71,8 +69,8 @@ class MessageResult(BaseModel):
     sent_at: Optional[datetime] = None
     error: Optional[str] = None
     screenshot_path: Optional[str] = None
-    generated_text: Optional[str] = None  # Para dry_run y debugging
-    target_username: Optional[str] = None  # Para trazabilidad
+    generated_text: Optional[str] = None
+    target_username: Optional[str] = None
     
     @field_validator("attempts")
     @classmethod

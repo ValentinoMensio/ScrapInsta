@@ -22,11 +22,9 @@ class LocalTaskQueue(TaskQueuePort):
             return None
 
         def _ack() -> None:
-            # no-op: ya lo extrajimos de la cola local
             return None
 
         def _nack() -> None:
-            # no reencolamos por simplicidad; mantener determinismo local
             return None
 
         return (env, _ack, _nack)

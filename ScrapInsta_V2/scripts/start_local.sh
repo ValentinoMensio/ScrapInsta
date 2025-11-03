@@ -1,9 +1,5 @@
-#!/bin/bash
-# Script para iniciar el sistema ScrapInsta localmente
-
 set -e
 
-# Colores
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -111,10 +107,8 @@ done
 
 # Aplicar schema si es necesario
 echo "   Aplicando schema..."
-# CORRECCIÓN: Usar variables de entorno en lugar de valores fijos
 if ! docker compose exec -T db mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "SELECT 1 FROM jobs LIMIT 1" > /dev/null 2>&1; then
     warn "Schema no encontrado, aplicando..."
-    # CORRECCIÓN: Usar variables de entorno en lugar de valores fijos
     docker compose exec -T db mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" < ../ops/db/schema.sql 2>/dev/null || true
     success "Schema aplicado"
 else

@@ -82,7 +82,6 @@ def calculate_success_score(profile: Dict[str, Any]) -> float:
     return round(score, 6)
 
 def evaluate_profile(profile: Dict[str, Any]) -> Dict[str, float] | None:
-    # <-- ACEPTA legacy y new; siempre evalúa con claves normalizadas
     p = _normalize_payload(profile)
     engagement_score = calculate_engagement_score(p)
     success_score = calculate_success_score(p)

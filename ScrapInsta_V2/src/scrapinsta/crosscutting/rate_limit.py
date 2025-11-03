@@ -57,7 +57,6 @@ class SlidingWindowRateLimiter:
         self._evict_old(now)
         if len(self._events) < self._cfg.max_events:
             return 0.0
-        # tiempo hasta que expire el más antiguo dentro de la ventana
         oldest = self._events[0]
         return max(0.0, oldest + self._cfg.window_seconds - now)
 

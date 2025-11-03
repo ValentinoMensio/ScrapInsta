@@ -226,7 +226,7 @@ class ProfileRepoSQL(ProfileRepository):
                 """,
                 (
                     profile_id,
-                    "selenium",  # Source estático por ahora
+                    "selenium",
                     snapshot.rubro,
                     basic.engagement_score if basic else None,
                     basic.success_score if basic else None,
@@ -235,7 +235,6 @@ class ProfileRepoSQL(ProfileRepository):
             conn.commit()
             cur.execute("SELECT LAST_INSERT_ID() as id")
             row = cur.fetchone()
-            # row es un dict cuando usas DictCursor, acceder por key
             return int(row.get("id", 0)) if row and row.get("id") is not None else 0
         except Exception as e:
             try:

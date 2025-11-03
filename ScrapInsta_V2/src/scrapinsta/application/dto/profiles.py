@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict
 
-# Importamos los modelos de negocio desde domain (no duplicamos).
 from scrapinsta.domain.models.profile_models import (
     PrivacyStatus,
     ProfileSnapshot,
@@ -41,13 +40,11 @@ class AnalyzeProfileResponse(BaseModel):
 
 
 __all__ = [
-    # Re-export para compatibilidad con imports existentes
     "PrivacyStatus",
     "ProfileSnapshot",
     "ReelMetrics",
     "PostMetrics",
     "BasicStats",
-    # DTOs del use case
     "AnalyzeProfileRequest",
     "AnalyzeProfileResponse",
 ]

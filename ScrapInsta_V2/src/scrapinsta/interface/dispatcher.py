@@ -107,7 +107,7 @@ class FetchToAnalyzeOrchestrator:
     def __init__(self, store: JobStoreSQL, router: Router) -> None:
         self._store = store
         self._router = router
-        self._created_once: Set[str] = set()  # guarda job_id de fetch ya encadenados
+        self._created_once: Set[str] = set()
 
     def _seed_owner(self, job_id: str) -> Optional[str]:
         sql = """
@@ -194,7 +194,6 @@ class FetchToAnalyzeOrchestrator:
         except Exception:
             return
 
-        # idempotencia: si ya encadenamos este fetch, salir
         if corr in self._created_once:
             return
 
@@ -203,17 +202,14 @@ class FetchToAnalyzeOrchestrator:
             logging.getLogger("dispatcher").warning("fetch→analyze: no owner seed for job %s", corr)
             return
 
-        # Determinar límite solicitado en el fetch
         limit_req = self._parse_fetch_limit(corr) or 500
 
-        # Preferir los followings recién scrapeados si vienen en el resultado del use case
         items: list[str] = []
         try:
             res_payload = getattr(res, "result", None) or {}
             fetched = res_payload.get("followings") if isinstance(res_payload, dict) else None
             if isinstance(fetched, list):
                 items = [str(u).strip().lower() for u in fetched if isinstance(u, str) and u.strip()]
-                # Aplicar límite SIEMPRE, incluso si el resultado trae más
                 if limit_req:
                     items = items[: int(limit_req)]
                 logging.getLogger("dispatcher").info(
@@ -226,8 +222,6 @@ class FetchToAnalyzeOrchestrator:
             )
             items = []
 
-        # Fallback a DB solo si el resultado NO trae followings Y el fallback es necesario
-        # Pero limitamos estrictamente al límite solicitado para evitar usar followings previos
         if not items:
             items = self._db_followings_for_owner(owner, limit=limit_req)
             logging.getLogger("dispatcher").info(
@@ -235,7 +229,6 @@ class FetchToAnalyzeOrchestrator:
                 len(items), limit_req
             )
 
-        # Filtrar destinos a los que ya se les envió mensaje POR ESTE CLIENTE
         try:
             meta = _load_job_meta(self._store, corr)
             client_acc = None
@@ -246,7 +239,6 @@ class FetchToAnalyzeOrchestrator:
         except Exception:
             pass
         
-        # Aplicar límite DESPUÉS del filtro para asegurar que no se exceda
         if limit_req and len(items) > limit_req:
             logging.getLogger("dispatcher").warning(
                 "fetch→analyze: items exceden límite (%d > %d), recortando", len(items), limit_req
@@ -300,7 +292,6 @@ class FetchToAnalyzeOrchestrator:
                 "No se pudo crear job analyze_profile para %s: %s", corr, e
             )
         finally:
-            # Marcar que este fetch ya fue encadenado, incluso si hubo carrera/duplicado
             self._created_once.add(corr)
 
 
@@ -395,7 +386,6 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
                             extra=extra,
                         )
 
-                        # Si el router devuelve duplicado, aún así marcamos como cargado para evitar spam
                         try:
                             router.add_job(job)
                             log.info("Job %s cargado en router (%s, items=%s).", jid, kind, items)
@@ -403,7 +393,6 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
                             loaded_jobs.add(jid)
 
                     except Exception as e:
-                        # Evita loop infinito si la excepción es por duplicado u otra recuperable
                         if "duplicado" in str(e).lower() or "duplicate" in str(e).lower():
                             loaded_jobs.add(jid)
                             log.warning("Job %s ya estaba en router: lo marco como cargado.", jid)
@@ -412,7 +401,6 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
 
             router.dispatch_tick()
 
-            # Mantenimiento: limpieza periódica de tasks viejas
             if now - last_cleanup >= 3600.0:
                 try:
                     removed = store.cleanup_stale_tasks(older_than_days=1)

@@ -8,7 +8,6 @@ from typing import Optional, List, Dict, Any
 from urllib.parse import urlparse, quote_plus
 import json, os
 
-# Carga .env si existe (no es obligatorio usarlo)
 load_dotenv()
 
 # -----------------------------
@@ -240,10 +239,6 @@ class Settings(BaseSettings):
         port = self.db_port
         db   = self.db_name
         return f"mysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8mb4"
-
-    def get_db_dsn(self) -> str:
-        """Equivalente en forma de método (por si lo preferís)."""
-        return self.db_dsn
     
     def get_router_config(self) -> Any:
         """
