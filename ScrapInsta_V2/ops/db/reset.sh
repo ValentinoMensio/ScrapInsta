@@ -45,9 +45,12 @@ docker compose exec -T db mysql -u"${DB_USER}" -p"${DB_PASS}" -e \
   "DROP DATABASE IF EXISTS \`${DB_NAME}\`; \
    CREATE DATABASE \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>&1 | grep -v "Warning" || true
 
-# Aplicar schema
-info "Aplicando schema..."
-docker compose exec -T db mysql -u"${DB_USER}" -p"${DB_PASS}" "${DB_NAME}" < "$SCHEMA_PATH" 2>&1 | grep -v "Warning" || true
+# Aplicar migraciones con Alembic
+info "Aplicando migraciones con Alembic..."
+cd "$PROJECT_ROOT"
+source .venv/bin/activate 2>/dev/null || true
+alembic upgrade head 2>&1 | grep -v "Warning" || true
+cd "$DOCKER_DIR"
 
 # Verificar tablas
 echo "🔍 Verificando tablas creadas..."

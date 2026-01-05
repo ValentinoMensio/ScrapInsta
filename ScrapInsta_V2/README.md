@@ -156,7 +156,7 @@ src/scrapinsta/
 
 - **Guía técnica**: [DEVELOPERGUIE.md](DEVELOPERGUIE.md)
 - **Guía de métricas**: [docs/METRICAS_GUIA.md](docs/METRICAS_GUIA.md)
-- **Mejoras planificadas**: [MEJORAS_PROFESIONALES.md](MEJORAS_PROFESIONALES.md)
+- **Migraciones de BD**: [docs/MIGRACIONES_BD.md](docs/MIGRACIONES_BD.md)
 
 ## Testing
 

@@ -1,28 +1,39 @@
-# --- Python ---
+# ============================================
+# Python
+# ============================================
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyc
 *.pyd
 *.so
-*.log
-*.sqlite3
 *.egg
 *.egg-info/
 dist/
 build/
 *.whl
 
-# --- Entorno virtual ---
+# ============================================
+# Entorno Virtual
+# ============================================
 .venv/
-env/
 venv/
+env/
+ENV/
+env.bak/
+venv.bak/
 
-# --- Archivos de entorno ---
+# ============================================
+# Archivos de Entorno
+# ============================================
 .env
 .env.*
+!.env.example
+*.local
 
-# --- Secretos ---
+# ============================================
+# Secretos y Credenciales
+# ============================================
 docker/secrets/instagram_accounts.json
 secrets/**
 *.pem
@@ -30,56 +41,196 @@ secrets/**
 *.crt
 *.p12
 *.pfx
+*.jks
+*.keystore
 
-# --- Archivos temporales ---
+# ============================================
+# Logs
+# ============================================
+*.log
+*.log.*
+logs/
+api.log
+dispatcher.log
+api_test.log
+*.out
+
+# ============================================
+# Base de Datos
+# ============================================
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# ============================================
+# Archivos Temporales
+# ============================================
 *.bak
 *.tmp
 *.swp
 *.swo
+*~
+.#*
+\#*#
 
-# --- Archivos del sistema ---
+# ============================================
+# Archivos del Sistema
+# ============================================
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+Desktop.ini
 
-# --- Docker ---
+# ============================================
+# Docker
+# ============================================
 docker/*.pid
 *.pid
 *.sock
+.dockerignore
 
-# --- IDEs ---
+# ============================================
+# IDEs y Editores
+# ============================================
+# VSCode
 .vscode/
-.idea/
 *.code-workspace
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Spyder
 .spyderproject
 .spyproject
 
-# --- Datos de ejecución / depuración ---
+# ============================================
+# Datos de Ejecución / Depuración
+# ============================================
 data/
-logs/
-chrome_debug.log
-
-# --- Datos locales de la app ---
-api.log
-dispatcher.log
 src/data/
+chrome_debug.log
+geckodriver.log
+selenium-server.log
+
+# ============================================
+# Browser / Selenium
+# ============================================
 src/scrapinsta/infrastructure/browser/**/downloads/
 src/scrapinsta/infrastructure/browser/**/tmp/
 src/scrapinsta/infrastructure/browser/**/cache/
+*.crx
+*.crx.zip
 
-# --- Pytest / cobertura ---
+# ============================================
+# Testing y Cobertura
+# ============================================
 .pytest_cache/
+.tox/
+.nox/
 .coverage
 .coverage.*
 coverage.xml
 htmlcov/
-.tox/
+.hypothesis/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+.pytest_cache/
+test-results/
+junit.xml
 
-# --- Archivos de desarrollo personal ---
+# ============================================
+# Type Checking
+# ============================================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+pyrightconfig.json
+
+# ============================================
+# Linting y Formatting
+# ============================================
+.ruff_cache/
+.bandit
+.flake8
+.pylint.d/
+*.cover
+.hypothesis/
+
+# ============================================
+# Alembic (mantener migraciones, ignorar temporales)
+# ============================================
+# Las migraciones en alembic/versions/ SÍ deben estar en git
+# Solo ignorar archivos temporales si los hay
+alembic/__pycache__/
+alembic/versions/__pycache__/
+
+# ============================================
+# Jupyter Notebooks
+# ============================================
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# ============================================
+# Archivos de Desarrollo Personal
+# ============================================
 res.md
 comandos
-*.local
 *.dev
+*.local
+notes.md
+TODO.md
+scratch.*
 
+# ============================================
+# Archivos de Backup
+# ============================================
+*.backup
+*.old
+*.orig
+
+# ============================================
+# Archivos de Compresión
+# ============================================
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+!requirements.txt
+
+# ============================================
+# Archivos de Documentación Generada
+# ============================================
+docs/_build/
+docs/.doctrees/
+site/

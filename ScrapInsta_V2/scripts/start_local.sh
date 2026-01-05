@@ -105,14 +105,17 @@ for i in {1..30}; do
     sleep 1
 done
 
-# Aplicar schema si es necesario
-echo "   Aplicando schema..."
+# Aplicar migraciones con Alembic si es necesario
+echo "   Aplicando migraciones..."
 if ! docker compose exec -T db mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "SELECT 1 FROM jobs LIMIT 1" > /dev/null 2>&1; then
-    warn "Schema no encontrado, aplicando..."
-    docker compose exec -T db mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" < ../ops/db/schema.sql 2>/dev/null || true
-    success "Schema aplicado"
+    warn "Base de datos vacía, aplicando migraciones..."
+    cd ..
+    source .venv/bin/activate 2>/dev/null || true
+    alembic upgrade head 2>/dev/null || true
+    cd "$DOCKER_DIR"
+    success "Migraciones aplicadas"
 else
-    info "Schema ya existe"
+    info "Base de datos ya tiene datos"
 fi
 
 cd ..

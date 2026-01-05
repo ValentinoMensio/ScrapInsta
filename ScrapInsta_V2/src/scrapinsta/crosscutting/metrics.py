@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Métricas Prometheus para observabilidad.
 

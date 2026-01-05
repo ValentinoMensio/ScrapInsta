@@ -81,7 +81,7 @@ class TestHealthEndpoint:
         response = api_client.get("/health")
         
         assert response.status_code == 200
-        assert response.json() == {"ok": True}
+        assert response.json() == {"ok": True, "status": "healthy"}
         mock_job_store.pending_jobs.assert_called_once()
     
     def test_health_db_error(self, api_client: TestClient, mock_job_store: Mock):
@@ -91,7 +91,7 @@ class TestHealthEndpoint:
         response = api_client.get("/health")
         
         assert response.status_code == 200  # Health siempre retorna 200
-        assert response.json() == {"ok": False, "error": "DB connection failed"}
+        assert response.json() == {"ok": False, "status": "unhealthy", "error": "DB connection failed"}
     
     def test_health_no_auth_required(self, api_client: TestClient):
         """Health check no requiere autenticación."""
