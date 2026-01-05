@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Callable, Optional, Tuple, List, Sequence, Set
 
 from selenium.common.exceptions import (
@@ -28,6 +29,10 @@ from scrapinsta.domain.ports.browser_port import (
     BrowserNavigationError,
     BrowserDOMError,
     BrowserRateLimitError,
+)
+from scrapinsta.crosscutting.metrics import (
+    browser_actions_total,
+    browser_action_duration_seconds,
 )
 
 from scrapinsta.infrastructure.browser.pages import profile_page, reels_page
@@ -124,70 +129,88 @@ class SeleniumBrowserAdapter(BrowserPort):
         if not username:
             return []
 
-        self._open_profile(username)
-        self._sleep_human()
-        self._open_following_modal()
+        account = getattr(self.driver, "account_id", "unknown")
+        start = time.time()
+        browser_actions_total.labels(action="get_followings", account=account).inc()
+        
+        try:
+            self._open_profile(username)
+            self._sleep_human()
+            self._open_following_modal()
 
-        unique: List[str] = []
-        seen: Set[str] = set()
-        no_growth = 0
-        scrolls_done = 0
-        last_gain = 0
+            unique: List[str] = []
+            seen: Set[str] = set()
+            no_growth = 0
+            scrolls_done = 0
+            last_gain = 0
 
-        self._sleep_human()
+            self._sleep_human()
 
-        while len(unique) < max_followings:
-            try:
-                batch = self._read_visible_usernames()
-            except RetryError as e:
-                raise BrowserDOMError("usernames list stale") from e
-            except WebDriverException as e:
-                msg = (str(e) or "").lower()
-                if "temporarily blocked" in msg or "try again later" in msg:
-                    raise BrowserRateLimitError("temporarily blocked by Instagram") from e
-                raise BrowserDOMError(str(e)) from e
+            while len(unique) < max_followings:
+                try:
+                    batch = self._read_visible_usernames()
+                except RetryError as e:
+                    raise BrowserDOMError("usernames list stale") from e
+                except WebDriverException as e:
+                    msg = (str(e) or "").lower()
+                    if "temporarily blocked" in msg or "try again later" in msg:
+                        raise BrowserRateLimitError("temporarily blocked by Instagram") from e
+                    raise BrowserDOMError(str(e)) from e
 
-            before = len(unique)
-            for s in batch:
-                if s in seen:
-                    continue
-                unique.append(s)
-                seen.add(s)
+                before = len(unique)
+                for s in batch:
+                    if s in seen:
+                        continue
+                    unique.append(s)
+                    seen.add(s)
+                    if len(unique) >= max_followings:
+                        break
+
                 if len(unique) >= max_followings:
                     break
 
-            if len(unique) >= max_followings:
-                break
+                if len(unique) == before:
+                    no_growth += 1
+                    if no_growth >= self._max_scrolls_no_growth:
+                        break
+                else:
+                    no_growth = 0
+                    last_gain = len(unique) - before
 
-            if len(unique) == before:
-                no_growth += 1
-                if no_growth >= self._max_scrolls_no_growth:
+                remaining = max(0, max_followings - len(unique))
+                self._scroll_step = 145 if remaining < 20 else 400
+
+                try:
+                    self._scroll_following_modal_once()
+                finally:
+                    self._sleep_human()
+                    scrolls_done += 1
+
+                avg_gain = last_gain if last_gain > 0 else 10
+                import math
+                max_reasonable_scrolls = math.ceil(remaining / max(1, avg_gain))
+                if scrolls_done >= max_reasonable_scrolls and remaining > 0:
                     break
-            else:
-                no_growth = 0
-                last_gain = len(unique) - before
 
-            remaining = max(0, max_followings - len(unique))
-            self._scroll_step = 145 if remaining < 20 else 400
-
-            try:
-                self._scroll_following_modal_once()
-            finally:
-                self._sleep_human()
-                scrolls_done += 1
-
-            avg_gain = last_gain if last_gain > 0 else 10
-            import math
-            max_reasonable_scrolls = math.ceil(remaining / max(1, avg_gain))
-            if scrolls_done >= max_reasonable_scrolls and remaining > 0:
-                break
-
-        return unique
+            duration = time.time() - start
+            browser_action_duration_seconds.labels(action="get_followings", account=account).observe(duration)
+            return unique
+        except Exception:
+            duration = time.time() - start
+            browser_action_duration_seconds.labels(action="get_followings", account=account).observe(duration)
+            raise
 
     def get_profile_snapshot(self, username: str) -> ProfileSnapshot:
+        account = getattr(self.driver, "account_id", "unknown")
+        start = time.time()
+        browser_actions_total.labels(action="get_profile_snapshot", account=account).inc()
+        
         try:
             self._go_profile(username)
-            return profile_page.get_profile_snapshot(self.driver, username, wait_seconds=int(self._wait_timeout))
+            result = profile_page.get_profile_snapshot(self.driver, username, wait_seconds=int(self._wait_timeout))
+            duration = time.time() - start
+            browser_action_duration_seconds.labels(action="get_profile_snapshot", account=account).observe(duration)
+            return result
         except (NoSuchElementException, StaleElementReferenceException, TimeoutException) as e:
             raise BrowserDOMError(f"snapshot scrape failed: {e}") from e
         except BrowserPortError:
@@ -201,6 +224,10 @@ class SeleniumBrowserAdapter(BrowserPort):
         *,
         max_reels: int = 5,
     ) -> Tuple[List[ReelMetrics], BasicStats]:
+        account = getattr(self.driver, "account_id", "unknown")
+        start = time.time()
+        browser_actions_total.labels(action="get_reel_metrics", account=account).inc()
+        
         try:
             self._go_reels(username)
             rows = reels_page.extract_reel_metrics_list(
@@ -231,6 +258,8 @@ class SeleniumBrowserAdapter(BrowserPort):
                 engagement_score=None,
                 success_score=None,
             )
+            duration = time.time() - start
+            browser_action_duration_seconds.labels(action="get_reel_metrics", account=account).observe(duration)
             return reels, bs
 
         except (NoSuchElementException, StaleElementReferenceException, TimeoutException) as e:

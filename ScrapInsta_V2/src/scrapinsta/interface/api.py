@@ -2,18 +2,38 @@ from __future__ import annotations
 
 import os
 from typing import List, Optional, Dict, Any
-
-from fastapi import FastAPI, Header, HTTPException, Path, Request
-import json
+from uuid import uuid4
 import time
+
+from fastapi import FastAPI, Header, HTTPException, Path, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+import json
 from pydantic import BaseModel, Field
 
 from scrapinsta.config.settings import Settings
-import logging
 from scrapinsta.infrastructure.db.job_store_sql import JobStoreSQL
+from scrapinsta.crosscutting.logging_config import (
+    configure_structured_logging,
+    get_logger,
+    bind_request_context,
+    clear_request_context,
+)
+from scrapinsta.crosscutting.metrics import (
+    http_requests_total,
+    http_request_duration_seconds,
+    rate_limit_hits_total,
+    get_metrics,
+    get_metrics_content_type,
+    get_metrics_json,
+    get_metrics_summary,
+)
 
-
-logger = logging.getLogger("api")
+# Configurar logging estructurado al inicio
+configure_structured_logging(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    json_format=os.getenv("LOG_FORMAT", "").lower() == "json",
+)
+logger = get_logger("api")
 
 # =========================================================
 # App
@@ -22,8 +42,78 @@ app = FastAPI(title="ScrapInsta Send API", version="0.1.0")
 
 # Singletons simples (sin DI compleja)
 _settings = Settings()
-logging.getLogger("api").info("[api] DB_DSN=%s", _settings.db_dsn)
+logger.info("api_started", db_dsn=_settings.db_dsn)
 _job_store = JobStoreSQL(_settings.db_dsn)
+
+
+# =========================================================
+# Middleware para Request ID y Métricas
+# =========================================================
+class ObservabilityMiddleware(BaseHTTPMiddleware):
+    """Middleware para agregar request ID y medir métricas."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Generar request ID único
+        request_id = request.headers.get("X-Request-ID") or uuid4().hex
+        trace_id = request.headers.get("X-Trace-ID") or uuid4().hex
+
+        # Bind contexto de logging
+        bind_request_context(
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+
+        # Medir tiempo de request
+        start_time = time.time()
+        method = request.method
+        path = request.url.path
+
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+        except Exception as e:
+            status_code = 500
+            logger.exception(
+                "request_error",
+                method=method,
+                path=path,
+                error=str(e),
+            )
+            raise
+        finally:
+            # Calcular duración
+            duration = time.time() - start_time
+
+            # Registrar métricas
+            http_requests_total.labels(
+                method=method,
+                endpoint=path,
+                status_code=status_code,
+            ).inc()
+            http_request_duration_seconds.labels(
+                method=method,
+                endpoint=path,
+            ).observe(duration)
+
+            # Log del request
+            logger.info(
+                "request_completed",
+                method=method,
+                path=path,
+                status_code=status_code,
+                duration_ms=round(duration * 1000, 2),
+            )
+
+            # Limpiar contexto
+            clear_request_context()
+
+        # Agregar headers de correlación
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Trace-ID"] = trace_id
+        return response
+
+
+app.add_middleware(ObservabilityMiddleware)
 
 # =========================================================
 # Auth mínima para clientes (extensión)
@@ -118,9 +208,31 @@ def _check_scope(client: Dict[str, Any], scope: str) -> None:
 def _rate_limit(client: Dict[str, Any], req: Request) -> None:
     rpm = int(client.get("rate") or 60)
     ip = req.headers.get("x-forwarded-for", req.client.host if req.client else "-").split(",")[0].strip()
+    endpoint = req.url.path
+    
     if not _rate.allow(f"client:{client['id']}", rpm):
+        rate_limit_hits_total.labels(
+            client_id=client['id'],
+            endpoint=endpoint,
+        ).inc()
+        logger.warning(
+            "rate_limit_hit",
+            client_id=client['id'],
+            endpoint=endpoint,
+            limit_type="client",
+        )
         raise HTTPException(status_code=429, detail="rate limit (cliente)")
     if not _rate.allow(f"ip:{ip}", max(60, rpm)):
+        rate_limit_hits_total.labels(
+            client_id="ip",
+            endpoint=endpoint,
+        ).inc()
+        logger.warning(
+            "rate_limit_hit",
+            ip=ip,
+            endpoint=endpoint,
+            limit_type="ip",
+        )
         raise HTTPException(status_code=429, detail="rate limit (ip)")
 
 
@@ -187,7 +299,17 @@ def pull_tasks(
     _rate_limit(client, request)
     account = _get_client_account(x_account)
     
-    logger.info(f"[api] pull_tasks account={account} limit={body.limit}")
+    # Bind contexto adicional
+    bind_request_context(
+        client_id=client.get("id"),
+        account=account,
+    )
+    
+    logger.info(
+        "pull_tasks_requested",
+        account=account,
+        limit=body.limit,
+    )
 
     try:
         rows = _job_store.lease_tasks(account_id=account, limit=body.limit)
@@ -255,14 +377,93 @@ def post_result(
 
 @app.get("/health")
 def health():
-    """Ping simple a la DB reutilizando el store."""
+    """
+    Health check básico: verifica conectividad con BD.
+    Usado para verificar que el servicio está vivo.
+    """
     try:
         _job_store.pending_jobs()
-        return {"ok": True}
+        return {"ok": True, "status": "healthy"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        logger.error("health_check_failed", error=str(e))
+        return {"ok": False, "status": "unhealthy", "error": str(e)}
 
-from uuid import uuid4
+
+@app.get("/ready")
+def ready():
+    """
+    Readiness check: verifica que el servicio está listo para recibir tráfico.
+    Verifica BD y dependencias críticas.
+    """
+    checks = {
+        "database": False,
+    }
+    all_ok = True
+
+    # Verificar BD
+    try:
+        _job_store.pending_jobs()
+        checks["database"] = True
+    except Exception as e:
+        logger.error("readiness_check_failed", component="database", error=str(e))
+        all_ok = False
+
+    status_code = 200 if all_ok else 503
+    return Response(
+        content=json.dumps({
+            "ok": all_ok,
+            "status": "ready" if all_ok else "not_ready",
+            "checks": checks,
+        }),
+        status_code=status_code,
+        media_type="application/json",
+    )
+
+
+@app.get("/live")
+def live():
+    """
+    Liveness check: verifica que el proceso está vivo.
+    Siempre retorna OK si el proceso está corriendo.
+    """
+    return {"ok": True, "status": "alive"}
+
+
+@app.get("/metrics")
+def metrics():
+    """
+    Endpoint de métricas Prometheus (formato Prometheus estándar).
+    Expone todas las métricas del sistema en formato Prometheus para scraping.
+    """
+    return Response(
+        content=get_metrics(),
+        media_type=get_metrics_content_type(),
+    )
+
+
+@app.get("/metrics/json")
+def metrics_json():
+    """
+    Endpoint de métricas en formato JSON legible.
+    Retorna todas las métricas organizadas por categoría en formato JSON.
+    """
+    return get_metrics_json()
+
+
+@app.get("/metrics/summary")
+def metrics_summary():
+    """
+    Endpoint de resumen de métricas.
+    Retorna un resumen legible de las métricas más importantes:
+    - Requests HTTP por endpoint y status
+    - Latencia promedio por endpoint
+    - Tareas procesadas por tipo
+    - Jobs activos
+    - Conexiones de BD
+    - Rate limit hits
+    - Workers activos
+    """
+    return get_metrics_summary()
 
 class EnqueueFollowingsRequest(BaseModel):
     target_username: str
@@ -292,7 +493,18 @@ def enqueue_followings(
 
     client_account = _get_client_account(x_account)  # valida y normaliza
 
-    logger.info(f"[api] enqueue_followings target={body.target_username} limit={body.limit} client_account={client_account}")
+    # Bind contexto
+    bind_request_context(
+        client_id=client.get("id"),
+        account=client_account,
+    )
+
+    logger.info(
+        "enqueue_followings_requested",
+        target_username=body.target_username,
+        limit=body.limit,
+        client_account=client_account,
+    )
 
     target = (body.target_username or "").strip().lower()
     if not target:

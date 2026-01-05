@@ -7,6 +7,11 @@ from typing import Callable, Optional
 
 from scrapinsta.application.dto.tasks import TaskEnvelope, ResultEnvelope
 from scrapinsta.application.services.task_dispatcher import TaskDispatcher
+from scrapinsta.crosscutting.metrics import (
+    tasks_processed_total,
+    task_duration_seconds,
+    worker_errors_total,
+)
 
 try:
     from scrapinsta.application.services.task_dispatcher import UseCaseFactory
@@ -131,8 +136,19 @@ class InstagramWorker:
                 logger.info("[%s] poison pill received -> exiting", self._name)
                 break
 
+            task_kind = getattr(env, "task", "unknown")
+            account = getattr(env, "account_id", "unknown")
+            start_time = time.time()
+
             try:
                 result = self._dispatcher.dispatch(env)
+                duration = time.time() - start_time
+                
+                task_duration_seconds.labels(kind=task_kind, account=account).observe(duration)
+                
+                status = "success" if result.ok else "failed"
+                tasks_processed_total.labels(kind=task_kind, status=status, account=account).inc()
+                
                 try:
                     self._send(result)
                 except Exception as e:
@@ -150,6 +166,13 @@ class InstagramWorker:
                     logger.debug("[%s] ack failed", self._name, exc_info=True)
 
             except Exception as e:
+                duration = time.time() - start_time
+                error_type = type(e).__name__
+                
+                task_duration_seconds.labels(kind=task_kind, account=account).observe(duration)
+                tasks_processed_total.labels(kind=task_kind, status="error", account=account).inc()
+                worker_errors_total.labels(account=account, error_type=error_type).inc()
+                
                 logger.exception("[%s] dispatch failed: %s", self._name, e)
                 try:
                     self._send(ResultEnvelope(

@@ -12,6 +12,7 @@ from collections import defaultdict, deque
 
 from scrapinsta.application.dto.tasks import TaskEnvelope, ResultEnvelope
 from scrapinsta.domain.ports.job_store import JobStorePort
+from scrapinsta.crosscutting.metrics import tasks_queued, jobs_active
 
 # =========================
 #   PARÁMETROS AJUSTABLES
@@ -248,6 +249,10 @@ class Router:
                 if dispatched_now == 0 and not self._any_account_can_send():
                     break
 
+            for acc in self._accounts:
+                queued_count = sum(len(job.pending) for job in self._jobs.values() if not job.done)
+                tasks_queued.labels(status="queued", account=acc).set(queued_count)
+
     def on_result(self, res: ResultEnvelope) -> None:
         """
         Se llama por cada resultado que llega de los workers.
@@ -296,6 +301,8 @@ class Router:
 
                     if corr and self._job_store.all_tasks_finished(corr):
                         self._job_store.mark_job_done(corr)
+                        jobs_active.labels(status="done").inc()
+                        jobs_active.labels(status="running").dec()
                 except Exception:
                     pass
 

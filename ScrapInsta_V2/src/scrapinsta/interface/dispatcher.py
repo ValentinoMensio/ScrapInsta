@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-import logging
+import os
 import signal
 import sys
 import time
@@ -17,18 +17,20 @@ from scrapinsta.interface.workers.router import Router, Job
 from scrapinsta.interface.workers.deps_factory import get_factory
 from scrapinsta.interface.queues import build_queues, TaskQueuePort, ResultQueuePort
 from scrapinsta.application.dto.tasks import TaskEnvelope, ResultEnvelope
+from scrapinsta.crosscutting.logging_config import (
+    configure_structured_logging,
+    get_logger,
+    bind_request_context,
+)
+from scrapinsta.crosscutting.metrics import workers_active, jobs_active
 
-
-def _configure_logging(level: str = "INFO") -> None:
-    lvl = getattr(logging, level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=lvl,
-        format="%(asctime)s [%(levelname)s] pid=%(process)d %(name)s: %(message)s",
-    )
-    for noisy in ("selenium", "seleniumwire", "undetected_chromedriver", "urllib3", "asyncio"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
-
-log = logging.getLogger("dispatcher")
+# Configurar logging estructurado
+configure_structured_logging(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    json_format=os.getenv("LOG_FORMAT", "").lower() == "json",
+    include_process_id=True,
+)
+log = get_logger("dispatcher")
 
 
 def _start_worker_process(
@@ -296,20 +298,27 @@ class FetchToAnalyzeOrchestrator:
 
 
 def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 0.05) -> None:
-    _configure_logging(log_level)
+    # Logging ya está configurado al importar el módulo
+    # Si se necesita cambiar el nivel, se puede hacer aquí
+    if log_level != os.getenv("LOG_LEVEL", "INFO"):
+        configure_structured_logging(
+            level=log_level,
+            json_format=os.getenv("LOG_FORMAT", "").lower() == "json",
+            include_process_id=True,
+        )
 
     settings = Settings()
-    log.info("[dispatcher] DB_DSN=%s", settings.db_dsn)
+    log.info("dispatcher_starting", db_dsn=settings.db_dsn)
     store = JobStoreSQL(settings.db_dsn)
 
     cfg_accounts = settings.get_accounts()
     if not cfg_accounts:
-        log.error("No hay cuentas bot configuradas en Settings.")
+        log.error("no_accounts_configured", message="No hay cuentas bot configuradas en Settings")
         sys.exit(1)
 
     accounts = [a.username for a in cfg_accounts]
     task_qs, result_qs, backend_name = build_queues(settings=settings, accounts=accounts)
-    log.info("Backend de colas: %s", backend_name)
+    log.info("queues_initialized", backend=backend_name, account_count=len(accounts))
 
     send_by_acc: Dict[str, callable] = {}
     stop_events: Dict[str, mp.Event] = {}
@@ -320,7 +329,8 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
         send_by_acc[acc] = task_qs[acc].send
         proc = _start_worker_process(acc, task_qs[acc], result_qs[acc], sev, settings)
         procs[acc] = proc
-        log.info("Worker lanzado para %s (pid=%s)", acc, proc.pid)
+        workers_active.labels(account=acc).inc()
+        log.info("worker_started", account=acc, pid=proc.pid)
 
     router = Router(
         accounts=accounts, 
@@ -335,14 +345,14 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
     stop = {"flag": False}
 
     def _sigterm(*_a):
-        log.warning("SIGTERM/SIGINT recibido. Parando…")
+        log.warning("shutdown_signal_received", signal="SIGTERM/SIGINT")
         stop["flag"] = True
         router.stop_accepting()
 
     signal.signal(signal.SIGINT, _sigterm)
     signal.signal(signal.SIGTERM, _sigterm)
 
-    log.info("Dispatcher iniciado; escaneando DB cada %.1fs…", scan_every_s)
+    log.info("dispatcher_ready", scan_interval_s=scan_every_s, accounts=accounts)
 
     last_scan = 0.0
     last_cleanup = 0.0
@@ -355,7 +365,7 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
                 try:
                     job_ids = store.pending_jobs()
                 except Exception as e:
-                    log.warning("pending_jobs() falló: %s", e)
+                    log.warning("pending_jobs_failed", error=str(e))
                     job_ids = []
 
                 for jid in job_ids:
@@ -373,7 +383,12 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
                         elif kind == "analyze_profile":
                             items = []
                         else:
-                            log.info("Job %s con kind %r aún no soportado por dispatcher; lo omito.", jid, kind)
+                            log.info(
+                                "job_kind_not_supported",
+                                job_id=jid,
+                                kind=kind,
+                                message="Job kind no soportado por dispatcher",
+                            )
                             loaded_jobs.add(jid)
                             continue
 
@@ -388,16 +403,30 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
 
                         try:
                             router.add_job(job)
-                            log.info("Job %s cargado en router (%s, items=%s).", jid, kind, items)
+                            jobs_active.labels(status="running").inc()
+                            log.info(
+                                "job_loaded",
+                                job_id=jid,
+                                kind=kind,
+                                items_count=len(items),
+                            )
                         finally:
                             loaded_jobs.add(jid)
 
                     except Exception as e:
                         if "duplicado" in str(e).lower() or "duplicate" in str(e).lower():
                             loaded_jobs.add(jid)
-                            log.warning("Job %s ya estaba en router: lo marco como cargado.", jid)
+                            log.warning(
+                                "job_already_loaded",
+                                job_id=jid,
+                                message="Job ya estaba en router",
+                            )
                         else:
-                            log.error("Error cargando job %s: %s", jid, e)
+                            log.error(
+                                "job_load_error",
+                                job_id=jid,
+                                error=str(e),
+                            )
 
             router.dispatch_tick()
 
@@ -405,12 +434,12 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
                 try:
                     removed = store.cleanup_stale_tasks(older_than_days=1)
                     if removed:
-                        log.info("Limpieza de job_tasks obsoletas: %d eliminadas", removed)
+                        log.info("cleanup_stale_tasks", removed_count=removed)
                     removed2 = store.cleanup_finished_tasks(older_than_days=90)
                     if removed2:
-                        log.info("Limpieza de job_tasks finalizadas: %d eliminadas", removed2)
-                except Exception:
-                    pass
+                        log.info("cleanup_finished_tasks", removed_count=removed2)
+                except Exception as e:
+                    log.warning("cleanup_error", error=str(e))
                 last_cleanup = now
 
             for rq in result_qs.values():
@@ -423,7 +452,7 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
 
             time.sleep(tick_sleep)
 
-        log.info("Parando…")
+        log.info("dispatcher_stopping")
 
     finally:
         for ev in stop_events.values():
@@ -431,9 +460,10 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
         for acc, p in procs.items():
             p.join(timeout=10)
             if p.is_alive():
-                log.warning("Forzando cierre de %s (pid=%s)", acc, p.pid)
+                log.warning("worker_force_terminate", account=acc, pid=p.pid)
                 p.terminate()
-        log.info("Dispatcher detenido.")
+            workers_active.labels(account=acc).dec()
+        log.info("dispatcher_stopped")
 
 
 if __name__ == "__main__":

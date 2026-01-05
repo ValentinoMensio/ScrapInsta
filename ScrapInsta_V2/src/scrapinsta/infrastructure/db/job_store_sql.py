@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import time
 from typing import Any, Dict, List, Optional
 import threading
 from queue import Queue, Empty
@@ -8,6 +9,11 @@ import os
 import pymysql  # pip install PyMySQL
 
 from scrapinsta.domain.ports.job_store import JobStorePort
+from scrapinsta.crosscutting.metrics import (
+    db_queries_total,
+    db_query_duration_seconds,
+    db_connections_active,
+)
 
 
 def _json(obj: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -86,6 +92,7 @@ class JobStoreSQL(JobStorePort):
             con = self._pool.get_nowait()
             try:
                 con.ping(reconnect=True)
+                db_connections_active.set(self._pool.qsize() + 1)
                 return con
             except Exception:
                 try:
@@ -104,7 +111,9 @@ class JobStoreSQL(JobStorePort):
                     break
 
         # Devolver una conexión nueva
-        return _new_conn()
+        con = _new_conn()
+        db_connections_active.set(self._pool.qsize() + 1)
+        return con
 
     def _return(self, con: pymysql.connections.Connection) -> None:
         """Devuelve la conexión al pool (o la cierra si no se puede reutilizar)."""
@@ -113,13 +122,26 @@ class JobStoreSQL(JobStorePort):
                 con.ping(reconnect=True)
             try:
                 self._pool.put_nowait(con)
+                db_connections_active.set(self._pool.qsize())
             except Exception:
                 con.close()
+                db_connections_active.set(self._pool.qsize())
         except Exception:
             try:
                 con.close()
             except Exception:
                 pass
+            db_connections_active.set(self._pool.qsize())
+
+    def _execute_query(self, cur, sql: str, params: tuple, operation: str, table: str) -> None:
+        """Wrapper para ejecutar queries con métricas."""
+        start = time.time()
+        try:
+            cur.execute(sql, params)
+            db_queries_total.labels(operation=operation, table=table).inc()
+        finally:
+            duration = time.time() - start
+            db_query_duration_seconds.labels(operation=operation, table=table).observe(duration)
 
     # -----------------------
     # Jobs
@@ -144,7 +166,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (job_id, kind, priority, batch_size, _json(extra), total_items))
+                self._execute_query(cur, sql, (job_id, kind, priority, batch_size, _json(extra), total_items), "insert", "jobs")
             con.commit()
         finally:
             self._return(con)
@@ -155,7 +177,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (job_id,))
+                self._execute_query(cur, sql, (job_id,), "update", "jobs")
             con.commit()
         finally:
             self._return(con)
@@ -166,7 +188,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (job_id,))
+                self._execute_query(cur, sql, (job_id,), "update", "jobs")
             con.commit()
         finally:
             self._return(con)
@@ -177,7 +199,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (job_id,))
+                self._execute_query(cur, sql, (job_id,), "update", "jobs")
             con.commit()
         finally:
             self._return(con)
@@ -208,7 +230,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (job_id, task_id, correlation_id, account_id, _norm(username), _json(payload)))
+                self._execute_query(cur, sql, (job_id, task_id, correlation_id, account_id, _norm(username), _json(payload)), "insert", "job_tasks")
             con.commit()
         finally:
             self._return(con)
@@ -219,7 +241,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (job_id, task_id))
+                self._execute_query(cur, sql, (job_id, task_id), "update", "job_tasks")
             con.commit()
         finally:
             self._return(con)
@@ -230,7 +252,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (job_id, task_id))
+                self._execute_query(cur, sql, (job_id, task_id), "update", "job_tasks")
             con.commit()
         finally:
             self._return(con)
@@ -241,7 +263,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (error[:2000], job_id, task_id))
+                self._execute_query(cur, sql, (error[:2000], job_id, task_id), "update", "job_tasks")
             con.commit()
         finally:
             self._return(con)
@@ -252,7 +274,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (job_id,))
+                self._execute_query(cur, sql, (job_id,), "select", "job_tasks")
                 row = cur.fetchone()
                 return (row or {}).get("c", 0) == 0
         finally:
@@ -267,7 +289,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql)
+                self._execute_query(cur, sql, (), "select", "jobs")
                 rows = cur.fetchall()
                 
                 # --- CORRECCIÓN ---
@@ -301,7 +323,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (job_id,))
+                self._execute_query(cur, sql, (job_id,), "select", "job_tasks")
                 row = cur.fetchone() or {}
                 return {
                     "queued": int(row.get("queued", 0)),
@@ -322,11 +344,14 @@ class JobStoreSQL(JobStorePort):
             WHERE status = 'queued'
               AND created_at < (NOW() - INTERVAL %s DAY)
         """
-        with self._connect() as con:
+        con = self._connect()
+        try:
             with con.cursor() as cur:
-                cur.execute(sql, (int(older_than_days),))
+                self._execute_query(cur, sql, (int(older_than_days),), "delete", "job_tasks")
                 affected = cur.rowcount or 0
             con.commit()
+        finally:
+            self._return(con)
         return int(affected)
 
     def cleanup_finished_tasks(self, older_than_days: int = 90) -> int:
@@ -337,11 +362,14 @@ class JobStoreSQL(JobStorePort):
               AND finished_at IS NOT NULL
               AND finished_at < (NOW() - INTERVAL %s DAY)
         """
-        with self._connect() as con:
+        con = self._connect()
+        try:
             with con.cursor() as cur:
-                cur.execute(sql, (int(older_than_days),))
+                self._execute_query(cur, sql, (int(older_than_days),), "delete", "job_tasks")
                 affected = cur.rowcount or 0
             con.commit()
+        finally:
+            self._return(con)
         return int(affected)
 
     # -----------------------
@@ -362,7 +390,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (cu, du))
+                self._execute_query(cur, sql, (cu, du), "select", "messages_sent")
                 row = cur.fetchone()
                 return bool(row)
         finally:
@@ -382,7 +410,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (du,))
+                self._execute_query(cur, sql, (du,), "select", "messages_sent")
                 row = cur.fetchone()
                 return bool(row)
         finally:
@@ -411,7 +439,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, (cu, du, job_id, task_id))
+                self._execute_query(cur, sql, (cu, du, job_id, task_id), "insert", "messages_sent")
             con.commit()
         finally:
             self._return(con)
@@ -445,7 +473,7 @@ class JobStoreSQL(JobStorePort):
             try:
                 with con.cursor() as cur:
                     cur.execute("START TRANSACTION;")
-                    cur.execute(sql_select, (account_id, limit))
+                    self._execute_query(cur, sql_select, (account_id, limit), "select", "job_tasks")
                     rows = cur.fetchall() or []
                     if not rows:
                         con.commit()
@@ -455,7 +483,7 @@ class JobStoreSQL(JobStorePort):
                     args: list[str] = []
                     for r in rows:
                         args += [r["job_id"], r["task_id"]]
-                    cur.execute(sql_update % keys, args)
+                    self._execute_query(cur, sql_update % keys, args, "update", "job_tasks")
                     con.commit()
                     leased = [
                         {
@@ -495,7 +523,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                cur.execute(sql, args)
+                self._execute_query(cur, sql, args, "update", "job_tasks")
             con.commit()
         finally:
             self._return(con)
