@@ -11,6 +11,12 @@ import json, os
 load_dotenv()
 
 # -----------------------------
+# BASE_DIR: Raíz del proyecto
+# -----------------------------
+# Calcula la raíz del proyecto (sube dos niveles desde scrapinsta/config/settings.py)
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+# -----------------------------
 # Modelos auxiliares
 # -----------------------------
 class AccountConfig(BaseModel):

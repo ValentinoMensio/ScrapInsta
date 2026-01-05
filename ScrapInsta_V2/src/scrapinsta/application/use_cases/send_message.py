@@ -151,7 +151,7 @@ class SendMessageUseCase:
             "text_length": len(text)
         })
 
-        @retry_auto(max_attempts=max_retries)
+        @retry_auto(max_retries=max_retries)
         def _send_with_retry() -> bool:
             nonlocal attempts
             attempts += 1

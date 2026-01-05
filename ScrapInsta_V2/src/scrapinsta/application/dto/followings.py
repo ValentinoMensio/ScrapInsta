@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
 from pydantic import BaseModel, Field, constr, field_validator, model_validator
@@ -42,7 +42,7 @@ class FetchFollowingsResponse(BaseModel):
     owner: str = Field(..., description="Usuario origen de los followings")
     followings: List[str] = Field(..., description="Usernames recolectados")
     new_saved: int = Field(..., ge=0, description="Nuevos followings insertados")
-    fetched_at: datetime = Field(default_factory=datetime.utcnow)
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     source: str = Field(default="selenium", description="Origen del scraping")
 
     model_config = ConfigDict(frozen=True)

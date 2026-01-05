@@ -2,8 +2,16 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyc
+*.pyd
+*.so
 *.log
 *.sqlite3
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
 
 # --- Entorno virtual ---
 .venv/
@@ -41,6 +49,9 @@ docker/*.pid
 # --- IDEs ---
 .vscode/
 .idea/
+*.code-workspace
+.spyderproject
+.spyproject
 
 # --- Datos de ejecución / depuración ---
 data/
@@ -58,7 +69,13 @@ src/scrapinsta/infrastructure/browser/**/cache/
 # --- Pytest / cobertura ---
 .pytest_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
 # --- Archivos de desarrollo personal ---
 res.md
