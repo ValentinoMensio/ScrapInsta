@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS profiles (
 
 
 CREATE INDEX ix_profiles_username ON profiles(username);
+CREATE INDEX idx_profiles_updated_at ON profiles(updated_at);
 
 
 -- =========================
@@ -32,6 +33,9 @@ CREATE TABLE IF NOT EXISTS profile_analysis (
     FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE INDEX idx_profile_analysis_profile_id ON profile_analysis(profile_id);
+CREATE INDEX idx_profile_analysis_analyzed_at ON profile_analysis(analyzed_at DESC);
+
 
 -- =========================
 -- Seguimientos de perfiles
@@ -44,6 +48,8 @@ CREATE TABLE IF NOT EXISTS `followings` (
   KEY `ix_followings_origin` (`username_origin`),
   KEY `ix_followings_target` (`username_target`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE INDEX idx_followings_created_at ON followings(created_at);
 
 
 -- ============================================
@@ -60,6 +66,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE INDEX idx_jobs_status_created ON jobs(status, created_at);
+CREATE INDEX idx_jobs_status_updated ON jobs(status, updated_at);
 
 
 -- =========================================================
@@ -88,6 +97,12 @@ CREATE TABLE job_tasks (
   UNIQUE KEY uk_job_username_account (job_id, username, account_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE INDEX idx_job_tasks_job_status ON job_tasks(job_id, status);
+CREATE INDEX idx_job_tasks_job_task ON job_tasks(job_id, task_id);
+CREATE INDEX idx_job_tasks_job_id ON job_tasks(job_id);
+CREATE INDEX idx_job_tasks_status_created ON job_tasks(status, created_at);
+CREATE INDEX idx_job_tasks_status_finished ON job_tasks(status, finished_at);
+
 
 -- =========================================================
 -- Tabla: messages_sent (ledger)
@@ -102,3 +117,7 @@ CREATE TABLE messages_sent (
                  ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_messages_sent_client_dest (client_username, dest_username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_messages_sent_dest ON messages_sent(dest_username);
+CREATE INDEX idx_messages_sent_client ON messages_sent(client_username);
+CREATE INDEX idx_messages_sent_last_sent ON messages_sent(last_sent_at);
