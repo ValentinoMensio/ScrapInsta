@@ -10,7 +10,7 @@ Este archivo proporciona:
 from __future__ import annotations
 
 from typing import Generator
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 import pytest
 
@@ -231,23 +231,26 @@ def mock_job_store() -> Mock:
     """
     Mock de JobStore para tests que no requieren BD.
     """
-    from scrapinsta.domain.ports.job_store import JobStorePort
-    
-    mock = Mock(spec=JobStorePort)
+    mock = MagicMock()
     mock.create_job.return_value = None
     mock.add_task.return_value = None
     mock.lease_tasks.return_value = []
     mock.mark_task_ok.return_value = None
     mock.mark_task_error.return_value = None
     mock.register_message_sent.return_value = None
+    mock.was_message_sent.return_value = False
+    mock.was_message_sent_any.return_value = False
     mock.all_tasks_finished.return_value = False
     mock.mark_job_done.return_value = None
+    mock.mark_job_running.return_value = None
     mock.job_summary.return_value = {
         "queued": 0,
         "sent": 0,
         "ok": 0,
         "error": 0,
     }
+    mock.get_job_client_id.return_value = "default"
+    mock.pending_jobs.return_value = []
     mock.pending_jobs.return_value = []
     
     return mock

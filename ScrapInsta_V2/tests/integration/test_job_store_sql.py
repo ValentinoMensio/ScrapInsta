@@ -65,7 +65,8 @@ class TestJobStoreSQL:
             priority=1,
             batch_size=10,
             extra={"key": "value"},
-            total_items=100
+            total_items=100,
+            client_id="default"
         )
         
         # Verificar que se llamó INSERT con ON DUPLICATE KEY UPDATE
@@ -81,6 +82,7 @@ class TestJobStoreSQL:
         assert params[3] == 10
         assert json.loads(params[4]) == {"key": "value"}  # extra_json
         assert params[5] == 100
+        assert params[6] == "default"  # client_id
         
         mock_pymysql_connection.commit.assert_called_once()
     
@@ -92,11 +94,13 @@ class TestJobStoreSQL:
             priority=2,
             batch_size=20,
             extra=None,
-            total_items=50
+            total_items=50,
+            client_id="default"
         )
         
         params = mock_cursor.execute.call_args[0][1]
         assert params[4] is None  # extra_json
+        assert params[6] == "default"  # client_id
     
     def test_mark_job_running(self, job_store, mock_pymysql_connection, mock_cursor):
         """Marcar job como running."""
@@ -134,7 +138,8 @@ class TestJobStoreSQL:
             correlation_id="corr789",
             account_id="account1",
             username="targetuser",
-            payload={"action": "send_message"}
+            payload={"action": "send_message"},
+            client_id="default"
         )
         
         sql_called = mock_cursor.execute.call_args[0][0]
@@ -159,11 +164,13 @@ class TestJobStoreSQL:
             correlation_id=None,
             account_id=None,
             username="  TargetUser  ",
-            payload=None
+            payload=None,
+            client_id="default"
         )
         
         params = mock_cursor.execute.call_args[0][1]
         assert params[4] == "targetuser"  # Normalizado a lowercase
+        assert params[6] == "default"  # client_id
     
     def test_mark_task_sent(self, job_store, mock_pymysql_connection, mock_cursor):
         """Marcar tarea como sent."""
@@ -414,6 +421,8 @@ class TestJobStoreSQL:
     
     def test_register_message_sent(self, job_store, mock_pymysql_connection, mock_cursor):
         """Registrar envío de mensaje."""
+        job_store.get_job_client_id = lambda job_id: "default" if job_id == "job123" else None
+        
         job_store.register_message_sent(
             client_username="client1",
             dest_username="target1",
@@ -424,12 +433,14 @@ class TestJobStoreSQL:
         sql_called = mock_cursor.execute.call_args[0][0]
         assert "INSERT INTO messages_sent" in sql_called
         assert "ON DUPLICATE KEY UPDATE" in sql_called
+        assert "client_id" in sql_called
         
         params = mock_cursor.execute.call_args[0][1]
         assert params[0] == "client1"  # Normalizado
         assert params[1] == "target1"  # Normalizado
         assert params[2] == "job123"
         assert params[3] == "task456"
+        assert params[4] == "default"  # client_id
         
         mock_pymysql_connection.commit.assert_called_once()
     

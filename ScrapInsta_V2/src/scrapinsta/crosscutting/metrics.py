@@ -1,12 +1,5 @@
 """
 Métricas Prometheus para observabilidad.
-
-Expone métricas clave del sistema:
-- Requests por endpoint
-- Latencia de requests
-- Tareas procesadas
-- Tamaño de colas
-- Errores por tipo
 """
 from __future__ import annotations
 
@@ -14,18 +7,12 @@ from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTEN
 from typing import Dict, Any
 
 
-# =========================================================
-# Métricas de API
-# =========================================================
-
-# Requests HTTP por endpoint y método
 http_requests_total = Counter(
     "http_requests_total",
     "Total HTTP requests",
     ["method", "endpoint", "status_code"]
 )
 
-# Latencia de requests HTTP
 http_request_duration_seconds = Histogram(
     "http_request_duration_seconds",
     "HTTP request duration in seconds",
@@ -33,18 +20,12 @@ http_request_duration_seconds = Histogram(
     buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
 )
 
-# =========================================================
-# Métricas de Jobs y Tasks
-# =========================================================
-
-# Tareas procesadas por tipo y estado
 tasks_processed_total = Counter(
     "tasks_processed_total",
     "Total tasks processed",
     ["kind", "status", "account"]
 )
 
-# Duración de procesamiento de tareas
 task_duration_seconds = Histogram(
     "task_duration_seconds",
     "Task processing duration in seconds",
@@ -52,32 +33,24 @@ task_duration_seconds = Histogram(
     buckets=(1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0)
 )
 
-# Jobs activos por estado
 jobs_active = Gauge(
     "jobs_active",
     "Active jobs by status",
     ["status"]
 )
 
-# Tareas en cola por estado y cuenta
 tasks_queued = Gauge(
     "tasks_queued",
     "Tasks in queue by status and account",
     ["status", "account"]
 )
 
-# =========================================================
-# Métricas de Base de Datos
-# =========================================================
-
-# Queries a BD por tipo
 db_queries_total = Counter(
     "db_queries_total",
     "Total database queries",
     ["operation", "table"]
 )
 
-# Duración de queries
 db_query_duration_seconds = Histogram(
     "db_query_duration_seconds",
     "Database query duration in seconds",
@@ -85,53 +58,35 @@ db_query_duration_seconds = Histogram(
     buckets=(0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0)
 )
 
-# Conexiones activas a BD
 db_connections_active = Gauge(
     "db_connections_active",
     "Active database connections"
 )
 
-# =========================================================
-# Métricas de Rate Limiting
-# =========================================================
-
-# Requests bloqueados por rate limit
 rate_limit_hits_total = Counter(
     "rate_limit_hits_total",
     "Total rate limit hits",
     ["client_id", "endpoint"]
 )
 
-# =========================================================
-# Métricas de Workers
-# =========================================================
-
-# Workers activos por cuenta
 workers_active = Gauge(
     "workers_active",
     "Active workers by account",
     ["account"]
 )
 
-# Errores de workers
 worker_errors_total = Counter(
     "worker_errors_total",
     "Total worker errors",
     ["account", "error_type"]
 )
 
-# =========================================================
-# Métricas de Selenium/Browser
-# =========================================================
-
-# Acciones de browser
 browser_actions_total = Counter(
     "browser_actions_total",
     "Total browser actions",
     ["action", "account"]
 )
 
-# Duración de acciones de browser
 browser_action_duration_seconds = Histogram(
     "browser_action_duration_seconds",
     "Browser action duration in seconds",
@@ -139,37 +94,15 @@ browser_action_duration_seconds = Histogram(
     buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
 )
 
-# =========================================================
-# Funciones de utilidad
-# =========================================================
-
 def get_metrics() -> bytes:
-    """
-    Genera métricas en formato Prometheus.
-
-    Returns:
-        Bytes con métricas en formato Prometheus
-    """
     return generate_latest()
 
 
 def get_metrics_content_type() -> str:
-    """
-    Retorna el Content-Type para métricas Prometheus.
-
-    Returns:
-        Content-Type apropiado
-    """
     return CONTENT_TYPE_LATEST
 
 
 def get_metrics_json() -> Dict[str, Any]:
-    """
-    Obtiene métricas en formato JSON legible.
-
-    Returns:
-        Diccionario con métricas organizadas por categoría
-    """
     from prometheus_client.parser import text_string_to_metric_families
     
     metrics_text = generate_latest().decode('utf-8')
@@ -192,12 +125,10 @@ def get_metrics_json() -> Dict[str, Any]:
                 "value": float(sample.value),
                 "labels": dict(sample.labels) if sample.labels else {},
             }
-            # Agregar el nombre completo si es un bucket o similar
             if sample.name != family_name:
                 sample_dict["metric_name"] = sample.name
             samples.append(sample_dict)
         
-        # Organizar por categoría
         if family_name.startswith("http_"):
             metrics_dict["http"][family_name] = {
                 "help": family.documentation,
@@ -245,12 +176,6 @@ def get_metrics_json() -> Dict[str, Any]:
 
 
 def get_metrics_summary() -> Dict[str, Any]:
-    """
-    Obtiene un resumen legible de las métricas más importantes.
-
-    Returns:
-        Diccionario con resumen de métricas clave en formato legible
-    """
     from prometheus_client.parser import text_string_to_metric_families
     
     metrics_text = generate_latest().decode('utf-8')
@@ -276,14 +201,11 @@ def get_metrics_summary() -> Dict[str, Any]:
         },
     }
     
-    # Variables temporales para calcular latencia
     latency_data: Dict[str, Dict[str, Any]] = {}
     
     for family in text_string_to_metric_families(metrics_text):
         if family.name == "http_requests_total":
-            # Agrupar por endpoint (solo muestras con el nombre exacto, no _created)
             for sample in family.samples:
-                # Ignorar muestras _created (son gauges de timestamp)
                 if "_created" in sample.name or sample.name != "http_requests_total":
                     continue
                     
@@ -305,7 +227,6 @@ def get_metrics_summary() -> Dict[str, Any]:
                     summary["http"]["requests_by_endpoint"][endpoint]["by_method"].get(method, 0.0) + float(sample.value)
             
         elif family.name == "http_request_duration_seconds":
-            # Procesar histogramas
             for sample in family.samples:
                 endpoint = sample.labels.get("endpoint", "unknown")
                 
@@ -317,7 +238,6 @@ def get_metrics_summary() -> Dict[str, Any]:
                 elif "_sum" in sample.name:
                     latency_data[endpoint]["sum"] = float(sample.value)
             
-            # Calcular promedios
             for endpoint, data in latency_data.items():
                 if data["count"] > 0:
                     avg_seconds = data["sum"] / data["count"]

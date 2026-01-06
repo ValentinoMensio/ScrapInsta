@@ -20,6 +20,7 @@ class JobStorePort(Protocol):
         batch_size: int,
         extra: Optional[Dict[str, Any]],
         total_items: int,
+        client_id: str,
     ) -> None:
         """
         Crea un nuevo job con los parámetros especificados.
@@ -54,6 +55,7 @@ class JobStorePort(Protocol):
         account_id: Optional[str],
         username: Optional[str],
         payload: Optional[Dict[str, Any]],
+        client_id: str,
     ) -> None:
         """
         Añade una tarea a un job existente.
@@ -103,6 +105,18 @@ class JobStorePort(Protocol):
         """
         ...
 
+    def get_job_client_id(self, job_id: str) -> Optional[str]:
+        """
+        Obtiene el client_id de un job.
+        
+        Args:
+            job_id: ID del job
+            
+        Returns:
+            client_id del job o None si no existe
+        """
+        ...
+
     def pending_jobs(self) -> List[str]:
         """
         Obtiene la lista de job IDs pendientes.
@@ -112,12 +126,13 @@ class JobStorePort(Protocol):
         """
         ...
 
-    def job_summary(self, job_id: str) -> Dict[str, Any]:
+    def job_summary(self, job_id: str, client_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Obtiene un resumen de un job.
         
         Args:
             job_id: ID del job
+            client_id: ID del cliente para validar ownership (opcional)
         
         Returns:
             Dict con información del job (status, counts, etc.)
@@ -147,6 +162,26 @@ class JobStorePort(Protocol):
 
     def was_message_sent_any(self, dest_username: str) -> bool:
         """Retorna True si cualquier cliente ya envió un mensaje al destino."""
+        ...
+
+    def register_message_sent(
+        self,
+        client_username: str,
+        dest_username: str,
+        job_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        client_id: Optional[str] = None,
+    ) -> None:
+        """
+        Registra envío de mensaje en el ledger.
+        
+        Args:
+            client_username: Username de la cuenta cliente que envió
+            dest_username: Username del destino
+            job_id: ID del job (opcional)
+            task_id: ID de la tarea (opcional)
+            client_id: ID del cliente (opcional, se obtiene del job si no se provee)
+        """
         ...
 
     def release_task(self, job_id: str, task_id: str, error: Optional[str]) -> None:

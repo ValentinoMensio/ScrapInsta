@@ -34,6 +34,7 @@ def mock_job_store() -> Mock:
     mock.all_tasks_finished.return_value = False
     mock.register_message_sent.return_value = None
     mock.was_message_sent.return_value = False
+    mock.get_job_client_id.return_value = "default"
     
     return mock
 
@@ -393,7 +394,8 @@ class TestCompleteSendMessageFlow:
         
         mock_job_store.lease_tasks.assert_called_once_with(
             account_id="test-account",
-            limit=10
+            limit=10,
+            client_id="default"
         )
         
         mock_job_store.all_tasks_finished.return_value = False
@@ -422,7 +424,8 @@ class TestCompleteSendMessageFlow:
             "test-account",
             "targetuser",
             "job:123",
-            "task:456"
+            "task:456",
+            client_id="default"
         )
     
     def test_complete_send_message_flow_with_error(
@@ -536,7 +539,8 @@ class TestCompleteSendMessageFlow:
         
         mock_job_store.lease_tasks.assert_called_once_with(
             account_id="test-account",
-            limit=10
+            limit=10,
+            client_id="default"
         )
 
 
@@ -585,6 +589,13 @@ class TestCompleteIntegratedFlow:
         
         assert mock_job_store.create_job.call_count == 2
         
+        mock_job_store.get_job_client_id.return_value = "default"
+        mock_job_store.job_summary.return_value = {
+            "queued": 0,
+            "sent": 0,
+            "ok": 1,
+            "error": 0
+        }
         response = api_client.get(
             f"/jobs/{fetch_job_id}/summary",
             headers=auth_headers

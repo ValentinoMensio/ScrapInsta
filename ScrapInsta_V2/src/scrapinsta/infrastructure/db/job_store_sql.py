@@ -154,11 +154,19 @@ class JobStoreSQL(JobStorePort):
         batch_size: int,
         extra: Optional[Dict[str, Any]],
         total_items: int,
+        client_id: str,
     ) -> None:
-        """Crea (o sobreescribe metadata) de un Job en estado 'pending'."""
+        """
+        Crea un nuevo job.
+        
+        IMPORTANTE: client_id es REQUERIDO y debe ser explícito.
+        No se permite usar 'default' a menos que sea explícitamente pasado.
+        """
+        if not client_id or not client_id.strip():
+            raise ValueError("client_id es requerido y no puede estar vacío")
         sql = """
-            INSERT INTO jobs (id, kind, priority, batch_size, extra_json, total_items, status)
-            VALUES (%s, %s, %s, %s, %s, %s, 'pending')
+            INSERT INTO jobs (id, kind, priority, batch_size, extra_json, total_items, status, client_id)
+            VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)
             ON DUPLICATE KEY UPDATE
               kind=VALUES(kind), priority=VALUES(priority), batch_size=VALUES(batch_size),
               extra_json=VALUES(extra_json), total_items=VALUES(total_items), updated_at=CURRENT_TIMESTAMP
@@ -166,7 +174,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                self._execute_query(cur, sql, (job_id, kind, priority, batch_size, _json(extra), total_items), "insert", "jobs")
+                self._execute_query(cur, sql, (job_id, kind, priority, batch_size, _json(extra), total_items, client_id), "insert", "jobs")
             con.commit()
         finally:
             self._return(con)
@@ -215,11 +223,20 @@ class JobStoreSQL(JobStorePort):
         account_id: Optional[str],
         username: Optional[str],
         payload: Optional[Dict[str, Any]],
+        client_id: str,
     ) -> None:
-        """Agrega/actualiza una task como 'queued'."""
+        """
+        Agrega una tarea a un job.
+        
+        IMPORTANTE: client_id es REQUERIDO y debe ser explícito.
+        No se permite usar 'default' a menos que sea explícitamente pasado.
+        """
+        if not client_id or not client_id.strip():
+            raise ValueError("client_id es requerido y no puede estar vacío")
+        
         sql = """
-            INSERT INTO job_tasks (job_id, task_id, correlation_id, account_id, username, payload_json, status)
-            VALUES (%s, %s, %s, %s, %s, %s, 'queued')
+            INSERT INTO job_tasks (job_id, task_id, correlation_id, account_id, username, payload_json, status, client_id)
+            VALUES (%s, %s, %s, %s, %s, %s, 'queued', %s)
             ON DUPLICATE KEY UPDATE
               correlation_id=VALUES(correlation_id),
               account_id=VALUES(account_id),
@@ -230,7 +247,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                self._execute_query(cur, sql, (job_id, task_id, correlation_id, account_id, _norm(username), _json(payload)), "insert", "job_tasks")
+                self._execute_query(cur, sql, (job_id, task_id, correlation_id, account_id, _norm(username), _json(payload), client_id), "insert", "job_tasks")
             con.commit()
         finally:
             self._return(con)
@@ -280,6 +297,20 @@ class JobStoreSQL(JobStorePort):
         finally:
             self._return(con)
 
+    def get_job_client_id(self, job_id: str) -> Optional[str]:
+        """Obtiene el client_id de un job."""
+        sql = "SELECT client_id FROM jobs WHERE id = %s"
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (job_id,), "select", "jobs")
+                row = cur.fetchone()
+                if row:
+                    return row.get("client_id")
+                return None
+        finally:
+            self._return(con)
+
     # -----------------------
     # Recuperación
     # -----------------------
@@ -309,17 +340,31 @@ class JobStoreSQL(JobStorePort):
         finally:
             self._return(con)
 
-    def job_summary(self, job_id: str) -> Dict[str, Any]:
+    def job_summary(self, job_id: str, client_id: Optional[str] = None) -> Dict[str, Any]:
         """Resumen de cantidades por estado para un job dado."""
-        sql = """
-          SELECT
-            SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS queued,
-            SUM(CASE WHEN status='sent'   THEN 1 ELSE 0 END) AS sent,
-            SUM(CASE WHEN status='ok'     THEN 1 ELSE 0 END) AS ok,
-            SUM(CASE WHEN status='error'  THEN 1 ELSE 0 END) AS error
-          FROM job_tasks
-          WHERE job_id=%s
-        """
+        if client_id:
+            sql = """
+              SELECT
+                SUM(CASE WHEN jt.status='queued' THEN 1 ELSE 0 END) AS queued,
+                SUM(CASE WHEN jt.status='sent'   THEN 1 ELSE 0 END) AS sent,
+                SUM(CASE WHEN jt.status='ok'     THEN 1 ELSE 0 END) AS ok,
+                SUM(CASE WHEN jt.status='error'  THEN 1 ELSE 0 END) AS error
+              FROM job_tasks jt
+              INNER JOIN jobs j ON jt.job_id = j.id
+              WHERE jt.job_id=%s AND j.client_id=%s
+            """
+            params = (job_id, client_id)
+        else:
+            sql = """
+              SELECT
+                SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS queued,
+                SUM(CASE WHEN status='sent'   THEN 1 ELSE 0 END) AS sent,
+                SUM(CASE WHEN status='ok'     THEN 1 ELSE 0 END) AS ok,
+                SUM(CASE WHEN status='error'  THEN 1 ELSE 0 END) AS error
+              FROM job_tasks
+              WHERE job_id=%s
+            """
+            params = (job_id,)
         con = self._connect()
         try:
             with con.cursor() as cur:
@@ -422,24 +467,39 @@ class JobStoreSQL(JobStorePort):
         dest_username: str,
         job_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        client_id: Optional[str] = None,
     ) -> None:
-        """Registra envío; idempotente gracias al UNIQUE(client_username, dest_username)."""
-        sql = """
-            INSERT INTO messages_sent (client_username, dest_username, job_id, task_id)
-            VALUES (%s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-              job_id = VALUES(job_id),
-              task_id = VALUES(task_id),
-              last_sent_at = CURRENT_TIMESTAMP
+        """
+        Registra envío; idempotente gracias al UNIQUE(client_username, dest_username).
+        Si client_id no se provee, se obtiene del job_id.
         """
         cu = _norm(client_username)
         du = _norm(dest_username)
         if not cu or not du:
             return
+        
+        if not client_id and job_id:
+            client_id = self.get_job_client_id(job_id)
+        
+        if not client_id:
+            raise ValueError(
+                f"client_id es requerido para register_message_sent. "
+                f"Provea client_id o un job_id válido."
+            )
+        
+        sql = """
+            INSERT INTO messages_sent (client_username, dest_username, job_id, task_id, client_id)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+              job_id = VALUES(job_id),
+              task_id = VALUES(task_id),
+              client_id = VALUES(client_id),
+              last_sent_at = CURRENT_TIMESTAMP
+        """
         con = self._connect()
         try:
             with con.cursor() as cur:
-                self._execute_query(cur, sql, (cu, du, job_id, task_id), "insert", "messages_sent")
+                self._execute_query(cur, sql, (cu, du, job_id, task_id, client_id), "insert", "messages_sent")
             con.commit()
         finally:
             self._return(con)
@@ -448,19 +508,32 @@ class JobStoreSQL(JobStorePort):
     # -----------------------
     # Leasing de tareas (extensiones o workers externos)
     # -----------------------
-    def lease_tasks(self, account_id: str, limit: int) -> List[Dict[str, Any]]:
+    def lease_tasks(self, account_id: str, limit: int, client_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Obtiene hasta `limit` tareas 'queued' para esta cuenta, las marca 'sent'
         y devuelve los datos mínimos para procesarlas. Usa SKIP LOCKED (MySQL 8+).
         """
-        sql_select = """
-            SELECT job_id, task_id, username, payload_json
-            FROM job_tasks
-            WHERE account_id = %s AND status = 'queued'
-            ORDER BY created_at ASC
-            LIMIT %s
-            FOR UPDATE SKIP LOCKED
-        """
+        if client_id:
+            sql_select = """
+                SELECT jt.job_id, jt.task_id, jt.username, jt.payload_json
+                FROM job_tasks jt
+                INNER JOIN jobs j ON jt.job_id = j.id
+                WHERE jt.account_id = %s AND jt.status = 'queued' AND j.client_id = %s
+                ORDER BY jt.created_at ASC
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+            """
+            select_params = (account_id, client_id, limit)
+        else:
+            sql_select = """
+                SELECT job_id, task_id, username, payload_json
+                FROM job_tasks
+                WHERE account_id = %s AND status = 'queued'
+                ORDER BY created_at ASC
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+            """
+            select_params = (account_id, limit)
         sql_update = """
             UPDATE job_tasks
             SET status = 'sent', sent_at = NOW(), updated_at = NOW()

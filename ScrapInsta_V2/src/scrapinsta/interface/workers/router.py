@@ -208,6 +208,14 @@ class Router:
 
             if self._job_store:
                 try:
+                    client_id = self._job_store.get_job_client_id(job.job_id)
+                    if not client_id:
+                        logging.getLogger("router").error(
+                            "job_missing_client_id",
+                            job_id=job.job_id,
+                            message="Job no tiene client_id asignado. Esto no debería ocurrir."
+                        )
+                        raise ValueError(f"Job {job.job_id} no tiene client_id asignado. Esto indica un error de datos.")
                     self._job_store.create_job(
                         job_id=job.job_id,
                         kind=job.kind,
@@ -215,6 +223,7 @@ class Router:
                         batch_size=job.batch_size,
                         extra=job.extra,
                         total_items=len(job.items),
+                        client_id=client_id,
                     )
                     self._job_store.mark_job_running(job.job_id)
                 except Exception:
@@ -500,6 +509,14 @@ class Router:
 
                 if self._job_store:
                     try:
+                        client_id = self._job_store.get_job_client_id(job.job_id)
+                        if not client_id:
+                            logging.getLogger("router").error(
+                                "job_missing_client_id",
+                                job_id=job.job_id,
+                                message="Job no tiene client_id asignado. Esto no debería ocurrir."
+                            )
+                            raise ValueError(f"Job {job.job_id} no tiene client_id asignado. Esto indica un error de datos.")
                         self._job_store.add_task(
                             job_id=job.job_id,
                             task_id=task_id,
@@ -507,6 +524,7 @@ class Router:
                             account_id=client_acc,
                             username=username,
                             payload=payload if isinstance(payload, dict) else None,
+                            client_id=client_id,
                         )
                         logging.getLogger("router").info("task queued: %s (account=%s)", task_id, client_acc)
                     except Exception:
@@ -540,6 +558,14 @@ class Router:
 
             if self._job_store:
                 try:
+                    client_id = self._job_store.get_job_client_id(job.job_id)
+                    if not client_id:
+                        logging.getLogger("router").error(
+                            "job_missing_client_id",
+                            job_id=job.job_id,
+                            message="Job no tiene client_id asignado. Esto no debería ocurrir."
+                        )
+                        raise ValueError(f"Job {job.job_id} no tiene client_id asignado. Esto indica un error de datos.")
                     self._job_store.add_task(
                         job_id=job.job_id,
                         task_id=task_id,
@@ -547,6 +573,7 @@ class Router:
                         account_id=acc,
                         username=username,
                         payload=payload if isinstance(payload, dict) else None,
+                        client_id=client_id,
                     )
                     logging.getLogger("router").info("task queued: %s (account=%s)", task_id, acc)
                 except Exception:

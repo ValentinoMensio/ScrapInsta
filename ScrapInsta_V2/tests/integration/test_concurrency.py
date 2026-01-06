@@ -200,7 +200,8 @@ class TestConcurrentJobCreation:
             priority: int,
             batch_size: int,
             extra: Dict[str, Any],
-            total_items: int
+            total_items: int,
+            client_id: str
         ) -> None:
             """Simula create_job con tracking de jobs creados."""
             with jobs_lock:
@@ -223,7 +224,8 @@ class TestConcurrentJobCreation:
                     priority=5,
                     batch_size=10,
                     extra={},
-                    total_items=100
+                    total_items=100,
+                    client_id="default"
                 )
         
         # Crear 10 workers que crean jobs simultáneamente
@@ -273,7 +275,8 @@ class TestConcurrentJobCreation:
                         priority=5,
                         batch_size=10,
                         extra={},
-                        total_items=100
+                        total_items=100,
+                        client_id="default"
                     )
             except Exception as e:
                 with creation_lock:

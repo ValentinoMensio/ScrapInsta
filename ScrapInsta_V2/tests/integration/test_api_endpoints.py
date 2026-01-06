@@ -230,14 +230,27 @@ class TestEnqueueFollowings:
         assert task_call["payload"]["username"] == "testuser"
     
     def test_enqueue_followings_bearer_auth(
-        self, api_client: TestClient, mock_job_store: Mock, auth_headers_bearer: Dict[str, str]
+        self, api_client: TestClient, mock_job_store: Mock, auth_headers_bearer: Dict[str, str], monkeypatch: pytest.MonkeyPatch
     ):
         """Enqueue funciona con Authorization Bearer."""
-        response = api_client.post(
-            "/ext/followings/enqueue",
-            json={"target_username": "testuser", "limit": 10},
-            headers=auth_headers_bearer
-        )
+        from unittest.mock import patch
+        from scrapinsta.infrastructure.auth.jwt_auth import verify_token
+        
+        def mock_verify_token(token):
+            if token == "test-secret-key":
+                return {"client_id": "default", "scopes": ["fetch", "analyze", "send"]}
+            return None
+        
+        with patch("scrapinsta.interface.api.verify_token", side_effect=mock_verify_token):
+            with patch("scrapinsta.interface.api._client_repo") as mock_repo:
+                mock_repo.get_by_id.return_value = {"id": "default", "status": "active"}
+                mock_repo.get_limits.return_value = {"requests_per_minute": 60}
+                
+                response = api_client.post(
+                    "/ext/followings/enqueue",
+                    json={"target_username": "testuser", "limit": 10},
+                    headers=auth_headers_bearer
+                )
         
         assert response.status_code == 200
         assert "job_id" in response.json()
@@ -361,6 +374,7 @@ class TestJobSummary:
         self, api_client: TestClient, mock_job_store: Mock, auth_headers: Dict[str, str]
     ):
         """Obtener resumen de job exitosamente."""
+        mock_job_store.get_job_client_id.return_value = "default"
         mock_job_store.job_summary.return_value = {
             "queued": 5,
             "sent": 3,
@@ -380,7 +394,8 @@ class TestJobSummary:
         assert data["ok"] == 2
         assert data["error"] == 1
         
-        mock_job_store.job_summary.assert_called_once_with("job:123")
+        mock_job_store.get_job_client_id.assert_called_once_with("job:123")
+        mock_job_store.job_summary.assert_called_once_with("job:123", client_id="default")
     
     def test_job_summary_without_auth(
         self, api_client: TestClient, auth_headers: Dict[str, str]
@@ -399,6 +414,7 @@ class TestJobSummary:
         self, api_client: TestClient, mock_job_store: Mock, auth_headers: Dict[str, str]
     ):
         """Job summary falla cuando job_summary lanza excepción."""
+        mock_job_store.get_job_client_id.return_value = "default"
         mock_job_store.job_summary.side_effect = Exception("DB error")
         
         response = api_client.get(
@@ -457,7 +473,8 @@ class TestSendPull:
         
         mock_job_store.lease_tasks.assert_called_once_with(
             account_id="test-account",
-            limit=10
+            limit=10,
+            client_id="default"
         )
     
     def test_send_pull_empty_result(
@@ -587,7 +604,8 @@ class TestSendResult:
             "test-account",
             "targetuser",
             "job:123",
-            "task:456"
+            "task:456",
+            client_id="default"
         )
     
     def test_send_result_success_error(

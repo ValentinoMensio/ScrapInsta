@@ -12,6 +12,9 @@ from pydantic import BaseModel, Field
 
 from scrapinsta.config.settings import Settings
 from scrapinsta.infrastructure.db.job_store_sql import JobStoreSQL
+from scrapinsta.infrastructure.db.client_repo_sql import ClientRepoSQL
+from scrapinsta.infrastructure.auth.jwt_auth import create_access_token, verify_token, get_client_id_from_token
+from passlib.context import CryptContext
 from scrapinsta.crosscutting.logging_config import (
     configure_structured_logging,
     get_logger,
@@ -44,6 +47,8 @@ app = FastAPI(title="ScrapInsta Send API", version="0.1.0")
 _settings = Settings()
 logger.info("api_started", db_dsn=_settings.db_dsn)
 _job_store = JobStoreSQL(_settings.db_dsn)
+_client_repo = ClientRepoSQL(_settings.db_dsn)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # =========================================================
@@ -165,15 +170,25 @@ def _normalize(s: Optional[str]) -> Optional[str]:
 
 
 def _auth_client(x_api_key: Optional[str], authorization: Optional[str], x_client_id: Optional[str]) -> Dict[str, Any]:
-    """
-    Autenticación de clientes con soporte de múltiples claves y scopes.
-    Si API_CLIENTS_JSON no está definido, cae a API_SHARED_SECRET (modo único).
-    """
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        payload = verify_token(token)
+        if payload:
+            client_id = payload.get("client_id")
+            if client_id:
+                client = _client_repo.get_by_id(client_id)
+                if client and client.get("status") == "active":
+                    limits = _client_repo.get_limits(client_id) or {}
+                    return {
+                        "id": client_id,
+                        "scopes": payload.get("scopes", ["fetch", "analyze", "send"]),
+                        "rate": limits.get("requests_per_minute", 60)
+                    }
+        raise HTTPException(status_code=401, detail="Token inválido o expirado")
+
     provided: Optional[str] = None
     if x_api_key and x_api_key.strip():
         provided = x_api_key.strip()
-    elif authorization and authorization.lower().startswith("bearer "):
-        provided = authorization.split(" ", 1)[1].strip()
 
     if _CLIENTS:
         cid = (x_client_id or "").strip()
@@ -245,6 +260,17 @@ def _get_client_account(x_account: Optional[str]) -> str:
 
 # =========================================================
 # Schemas
+
+class LoginRequest(BaseModel):
+    api_key: str = Field(..., description="API key del cliente")
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = 3600
+    client_id: str
+
+# Endpoints
 # =========================================================
 class PullRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=100, description="Máximo de tareas a tomar")
@@ -280,6 +306,35 @@ class JobSummaryResponse(BaseModel):
 # =========================================================
 # Endpoints
 # =========================================================
+
+class LoginRequest(BaseModel):
+    api_key: str = Field(..., description="API key del cliente")
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = 3600
+    client_id: str
+
+@app.post("/api/auth/login", response_model=LoginResponse)
+def login(body: LoginRequest):
+    client = _client_repo.get_by_api_key(body.api_key)
+    if not client:
+        raise HTTPException(status_code=401, detail="API key inválida")
+    
+    if client.get("status") != "active":
+        raise HTTPException(status_code=403, detail="Cliente suspendido o eliminado")
+    
+    access_token = create_access_token({
+        "client_id": client["id"],
+        "scopes": ["fetch", "analyze", "send"]
+    })
+    
+    return LoginResponse(
+        access_token=access_token,
+        client_id=client["id"]
+    )
+
 @app.post("/api/send/pull", response_model=PullResponse)
 def pull_tasks(
     body: PullRequest,
@@ -311,8 +366,9 @@ def pull_tasks(
         limit=body.limit,
     )
 
+    client_id = client.get("id")
     try:
-        rows = _job_store.lease_tasks(account_id=account, limit=body.limit)
+        rows = _job_store.lease_tasks(account_id=account, limit=body.limit, client_id=client_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"lease_tasks failed: {e}")
 
@@ -347,6 +403,7 @@ def post_result(
     _check_scope(client, "send")
     _rate_limit(client, request)
     account = _get_client_account(x_account)
+    client_id = client.get("id")
 
     # Marcar estado de la task
     try:
@@ -360,7 +417,13 @@ def post_result(
     # Ledger: registrar envío exitoso por (cuenta cliente, destino)
     if body.ok and (body.dest_username and body.dest_username.strip()):
         try:
-            _job_store.register_message_sent(account, body.dest_username.strip(), body.job_id, body.task_id)
+            _job_store.register_message_sent(
+                account,
+                body.dest_username.strip(),
+                body.job_id,
+                body.task_id,
+                client_id=client_id
+            )
         except Exception:
             # No romper si falla el ledger; el envío ya se marcó ok
             pass
@@ -512,6 +575,7 @@ def enqueue_followings(
 
     job_id = f"job:{uuid4().hex}"
 
+    client_id = client.get("id")
     try:
         _job_store.create_job(
             job_id=job_id,
@@ -520,6 +584,7 @@ def enqueue_followings(
             batch_size=1,
             extra={"limit": body.limit, "source": "ext", "client_account": client_account},
             total_items=1,
+            client_id=client_id,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"create_job failed: {e}")
@@ -533,6 +598,7 @@ def enqueue_followings(
             account_id=None,
             username=target,
             payload={"username": target, "limit": body.limit, "client_account": client_account},
+            client_id=client_id,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"add_task failed: {e}")
@@ -554,8 +620,16 @@ def job_summary(
     _enforce_https(request)
     client = _auth_client(x_api_key, authorization, x_client_id)
     _rate_limit(client, request)
+    client_id = client.get("id")
+    
+    job_client_id = _job_store.get_job_client_id(job_id)
+    if not job_client_id:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    if job_client_id != client_id:
+        raise HTTPException(status_code=403, detail="No tienes acceso a este job")
+    
     try:
-        s = _job_store.job_summary(job_id)
+        s = _job_store.job_summary(job_id, client_id=client_id)
         safe = {
             "queued": int(s.get("queued") or 0),
             "sent":   int(s.get("sent")   or 0),
@@ -601,6 +675,7 @@ def enqueue_analyze_profile(
 
     job_id = f"job:{uuid4().hex}"
 
+    client_id = client.get("id")
     try:
         _job_store.create_job(
             job_id=job_id,
@@ -609,11 +684,11 @@ def enqueue_analyze_profile(
             batch_size=body.batch_size,
             extra=body.extra or {},
             total_items=len(usernames),
+            client_id=client_id,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"create_job failed: {e}")
 
-    # Creamos las tasks 'queued' (Router las enviará a los bots y marcará 'sent')
     for u in usernames:
         try:
             task_id = f"{job_id}:analyze_profile:{u}"
@@ -624,6 +699,7 @@ def enqueue_analyze_profile(
                 account_id=None,
                 username=u,
                 payload={"username": u, **(body.extra or {})},
+                client_id=client_id,
             )
         except Exception:
             pass

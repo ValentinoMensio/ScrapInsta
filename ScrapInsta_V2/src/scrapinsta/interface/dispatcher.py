@@ -253,6 +253,14 @@ class FetchToAnalyzeOrchestrator:
             return
 
         analyze_job_id = f"analyze:{corr}"
+        client_id = self._store.get_job_client_id(corr)
+        if not client_id:
+            log.error(
+                "job_missing_client_id",
+                job_id=corr,
+                message="Job no tiene client_id asignado. Esto no debería ocurrir."
+            )
+            raise ValueError(f"Job {corr} no tiene client_id asignado. Esto indica un error de datos.")
         try:
             self._store.create_job(
                 job_id=analyze_job_id,
@@ -261,6 +269,7 @@ class FetchToAnalyzeOrchestrator:
                 batch_size=25,
                 extra={},
                 total_items=len(items),
+                client_id=client_id,
             )
             self._store.mark_job_running(analyze_job_id)
 
@@ -273,6 +282,7 @@ class FetchToAnalyzeOrchestrator:
                     account_id=None,
                     username=u,
                     payload={"username": u},
+                    client_id=client_id,
                 )
 
             analyze_job = Job(
