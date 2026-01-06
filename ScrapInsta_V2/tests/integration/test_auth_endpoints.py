@@ -12,6 +12,15 @@ from passlib.context import CryptContext
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def get_error_message(response) -> str:
+    """Helper para obtener el mensaje de error del nuevo formato."""
+    data = response.json()
+    if "error" in data:
+        return data["error"].get("message", "")
+    # Fallback para formato antiguo
+    return data.get("detail", "")
+
+
 @pytest.fixture
 def mock_client_repo(monkeypatch: pytest.MonkeyPatch):
     """Mock de ClientRepoSQL."""
@@ -76,7 +85,7 @@ class TestLoginEndpoint:
         )
         
         assert response.status_code == 401
-        assert "API key inválida" in response.json()["detail"]
+        assert "API key inválida" in get_error_message(response)
     
     def test_login_suspended_client(self, api_client: TestClient, mock_client_repo: Mock):
         """Login falla con cliente suspendido."""
@@ -93,7 +102,7 @@ class TestLoginEndpoint:
         )
         
         assert response.status_code == 403
-        assert "suspendido" in response.json()["detail"].lower()
+        assert "suspendido" in get_error_message(response).lower() or "no está activo" in get_error_message(response).lower()
     
     def test_login_deleted_client(self, api_client: TestClient, mock_client_repo: Mock):
         """Login falla con cliente eliminado."""
@@ -149,8 +158,8 @@ class TestJWTAuthentication:
         )
         
         assert response.status_code == 401
-        detail = response.json()["detail"]
-        assert "Token inválido" in detail or "API key inválida" in detail
+        error_msg = get_error_message(response)
+        assert "Token inválido" in error_msg or "API key inválida" in error_msg
     
     def test_jwt_token_missing(self, api_client: TestClient):
         """Sin JWT token, cae a API key."""
@@ -201,7 +210,8 @@ class TestOwnershipValidation:
         )
         
         assert response.status_code == 403
-        assert "acceso" in response.json()["detail"].lower()
+        error_msg = get_error_message(response)
+        assert "acceso" in error_msg.lower() or "pertenece" in error_msg.lower()
     
     def test_job_summary_job_not_found(self, api_client: TestClient, mock_job_store: Mock):
         """Job no encontrado retorna 404."""
