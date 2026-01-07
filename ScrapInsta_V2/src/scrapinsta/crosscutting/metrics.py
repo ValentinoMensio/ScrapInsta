@@ -94,6 +94,44 @@ browser_action_duration_seconds = Histogram(
     buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
 )
 
+cleanup_operations_total = Counter(
+    "cleanup_operations_total",
+    "Total cleanup operations executed",
+    ["operation_type"]
+)
+
+cleanup_rows_deleted_total = Counter(
+    "cleanup_rows_deleted_total",
+    "Total rows deleted by cleanup operations",
+    ["operation_type", "table"]
+)
+
+cleanup_duration_seconds = Histogram(
+    "cleanup_duration_seconds",
+    "Cleanup operation duration in seconds",
+    ["operation_type"],
+    buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0)
+)
+
+cleanup_last_run_timestamp = Gauge(
+    "cleanup_last_run_timestamp",
+    "Unix timestamp of last cleanup run",
+    ["operation_type"]
+)
+
+lease_cleanup_reclaimed_total = Counter(
+    "lease_cleanup_reclaimed_total",
+    "Total tasks reclaimed from expired leases",
+    []
+)
+
+lease_cleanup_duration_seconds = Histogram(
+    "lease_cleanup_duration_seconds",
+    "Lease cleanup operation duration in seconds",
+    [],
+    buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0)
+)
+
 def get_metrics() -> bytes:
     return generate_latest()
 
@@ -171,6 +209,12 @@ def get_metrics_json() -> Dict[str, Any]:
                 "type": family.type,
                 "samples": samples,
             }
+        elif family_name.startswith("cleanup_") or family_name.startswith("lease_cleanup_"):
+            metrics_dict["cleanup"][family_name] = {
+                "help": family.documentation,
+                "type": family.type,
+                "samples": samples,
+            }
     
     return metrics_dict
 
@@ -198,6 +242,11 @@ def get_metrics_summary() -> Dict[str, Any]:
         },
         "workers": {
             "total_active": 0.0,
+        },
+        "cleanup": {
+            "total_operations": 0.0,
+            "total_rows_deleted": 0.0,
+            "last_run_timestamps": {},
         },
     }
     
@@ -273,6 +322,19 @@ def get_metrics_summary() -> Dict[str, Any]:
         elif family.name == "workers_active":
             total_workers = sum(float(s.value) for s in family.samples)
             summary["workers"]["total_active"] = total_workers
+        
+        elif family.name == "cleanup_operations_total":
+            total_ops = sum(float(s.value) for s in family.samples)
+            summary["cleanup"]["total_operations"] = total_ops
+        
+        elif family.name == "cleanup_rows_deleted_total":
+            total_rows = sum(float(s.value) for s in family.samples)
+            summary["cleanup"]["total_rows_deleted"] = total_rows
+        
+        elif family.name == "cleanup_last_run_timestamp":
+            for sample in family.samples:
+                op_type = sample.labels.get("operation_type", "unknown")
+                summary["cleanup"]["last_run_timestamps"][op_type] = float(sample.value)
     
     return summary
 

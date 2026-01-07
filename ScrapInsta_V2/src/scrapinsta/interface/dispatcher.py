@@ -21,7 +21,16 @@ from scrapinsta.crosscutting.logging_config import (
     get_logger,
     bind_request_context,
 )
-from scrapinsta.crosscutting.metrics import workers_active, jobs_active
+from scrapinsta.crosscutting.metrics import (
+    workers_active,
+    jobs_active,
+    cleanup_operations_total,
+    cleanup_rows_deleted_total,
+    cleanup_duration_seconds,
+    cleanup_last_run_timestamp,
+    lease_cleanup_reclaimed_total,
+    lease_cleanup_duration_seconds,
+)
 
 # Configurar logging estructurado
 configure_structured_logging(
@@ -365,6 +374,13 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
 
     last_scan = 0.0
     last_cleanup = 0.0
+    last_lease_cleanup = 0.0
+    lease_cleanup_interval = float(os.getenv("LEASE_CLEANUP_INTERVAL", "60"))
+    max_reclaimed_per_run = int(os.getenv("LEASE_CLEANUP_MAX_RECLAIMED", "100"))
+    cleanup_interval = float(os.getenv("CLEANUP_INTERVAL", "86400"))  # Default: 24 horas
+    cleanup_stale_days = int(os.getenv("CLEANUP_STALE_DAYS", "1"))  # Default: 1 día
+    cleanup_finished_days = int(os.getenv("CLEANUP_FINISHED_DAYS", "90"))  # Default: 90 días
+    cleanup_batch_size = int(os.getenv("CLEANUP_BATCH_SIZE", "1000"))  # Default: 1000 filas por lote
     try:
         while not stop["flag"]:
             now = time.time()
@@ -439,14 +455,77 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
 
             router.dispatch_tick()
 
-            if now - last_cleanup >= 3600.0:
+            if now - last_lease_cleanup >= lease_cleanup_interval:
                 try:
-                    removed = store.cleanup_stale_tasks(older_than_days=1)
+                    lease_cleanup_start = time.time()
+                    reclaimed = store.reclaim_expired_leases(max_reclaimed=max_reclaimed_per_run)
+                    lease_cleanup_duration = time.time() - lease_cleanup_start
+                    
+                    if reclaimed > 0:
+                        log.info(
+                            "leases_reclaimed",
+                            count=reclaimed,
+                            max_reclaimed=max_reclaimed_per_run,
+                        )
+                    
+                    lease_cleanup_reclaimed_total.inc(reclaimed)
+                    lease_cleanup_duration_seconds.observe(lease_cleanup_duration)
+                except Exception as e:
+                    log.warning("lease_cleanup_error", error=str(e))
+                last_lease_cleanup = now
+
+            if now - last_cleanup >= cleanup_interval:
+                try:
+                    cleanup_start = time.time()
+                    
+                    stale_start = time.time()
+                    removed = store.cleanup_stale_tasks(older_than_days=cleanup_stale_days, batch_size=cleanup_batch_size)
+                    stale_duration = time.time() - stale_start
                     if removed:
-                        log.info("cleanup_stale_tasks", removed_count=removed)
-                    removed2 = store.cleanup_finished_tasks(older_than_days=90)
+                        log.info(
+                            "cleanup_stale_tasks",
+                            removed_count=removed,
+                            older_than_days=cleanup_stale_days,
+                        )
+                        cleanup_operations_total.labels(operation_type="stale_tasks").inc()
+                        cleanup_rows_deleted_total.labels(operation_type="stale_tasks", table="job_tasks").inc(removed)
+                        cleanup_duration_seconds.labels(operation_type="stale_tasks").observe(stale_duration)
+                        cleanup_last_run_timestamp.labels(operation_type="stale_tasks").set(now)
+                    
+                    finished_start = time.time()
+                    removed2 = store.cleanup_finished_tasks(older_than_days=cleanup_finished_days, batch_size=cleanup_batch_size)
+                    finished_duration = time.time() - finished_start
                     if removed2:
-                        log.info("cleanup_finished_tasks", removed_count=removed2)
+                        log.info(
+                            "cleanup_finished_tasks",
+                            removed_count=removed2,
+                            older_than_days=cleanup_finished_days,
+                        )
+                        cleanup_operations_total.labels(operation_type="finished_tasks").inc()
+                        cleanup_rows_deleted_total.labels(operation_type="finished_tasks", table="job_tasks").inc(removed2)
+                        cleanup_duration_seconds.labels(operation_type="finished_tasks").observe(finished_duration)
+                        cleanup_last_run_timestamp.labels(operation_type="finished_tasks").set(now)
+                    
+                    orphaned_start = time.time()
+                    removed3 = store.cleanup_orphaned_jobs(older_than_days=7)
+                    orphaned_duration = time.time() - orphaned_start
+                    if removed3:
+                        log.info(
+                            "cleanup_orphaned_jobs",
+                            removed_count=removed3,
+                        )
+                        cleanup_operations_total.labels(operation_type="orphaned_jobs").inc()
+                        cleanup_rows_deleted_total.labels(operation_type="orphaned_jobs", table="jobs").inc(removed3)
+                        cleanup_duration_seconds.labels(operation_type="orphaned_jobs").observe(orphaned_duration)
+                        cleanup_last_run_timestamp.labels(operation_type="orphaned_jobs").set(now)
+                    
+                    cleanup_duration = time.time() - cleanup_start
+                    if removed or removed2 or removed3:
+                        log.info(
+                            "cleanup_completed",
+                            total_removed=removed + removed2 + removed3,
+                            duration_ms=round(cleanup_duration * 1000, 2),
+                        )
                 except Exception as e:
                     log.warning("cleanup_error", error=str(e))
                 last_cleanup = now

@@ -265,7 +265,7 @@ class JobStoreSQL(JobStorePort):
 
     def mark_task_ok(self, job_id: str, task_id: str, result: Optional[Dict[str, Any]]) -> None:
         """Marca task como 'ok' y cierra timestamps."""
-        sql = "UPDATE job_tasks SET status='ok', finished_at=NOW(), updated_at=NOW() WHERE job_id=%s AND task_id=%s"
+        sql = "UPDATE job_tasks SET status='ok', finished_at=NOW(), leased_at=NULL, updated_at=NOW() WHERE job_id=%s AND task_id=%s"
         con = self._connect()
         try:
             with con.cursor() as cur:
@@ -276,7 +276,7 @@ class JobStoreSQL(JobStorePort):
 
     def mark_task_error(self, job_id: str, task_id: str, error: str) -> None:
         """Marca task como 'error' con mensaje (recortado a 2000 chars)."""
-        sql = "UPDATE job_tasks SET status='error', error_msg=%s, finished_at=NOW(), updated_at=NOW() WHERE job_id=%s AND task_id=%s"
+        sql = "UPDATE job_tasks SET status='error', error_msg=%s, finished_at=NOW(), leased_at=NULL, updated_at=NOW() WHERE job_id=%s AND task_id=%s"
         con = self._connect()
         try:
             with con.cursor() as cur:
@@ -382,35 +382,95 @@ class JobStoreSQL(JobStorePort):
     # -----------------------
     # Mantenimiento
     # -----------------------
-    def cleanup_stale_tasks(self, older_than_days: int = 1) -> int:
-        """Elimina tasks 'queued' antiguas para mantener limpia la tabla."""
-        sql = """
-            DELETE FROM job_tasks
-            WHERE status = 'queued'
-              AND created_at < (NOW() - INTERVAL %s DAY)
+    def cleanup_stale_tasks(self, older_than_days: int = 1, batch_size: int = 1000) -> int:
         """
+        Elimina tasks 'queued' antiguas para mantener limpia la tabla.
+        Procesa por lotes para evitar locks largos.
+        
+        Args:
+            older_than_days: Días de antigüedad para considerar una tarea como "stale"
+            batch_size: Número máximo de filas a eliminar por lote
+            
+        Returns:
+            Total de tareas eliminadas
+        """
+        total_affected = 0
         con = self._connect()
         try:
-            with con.cursor() as cur:
-                self._execute_query(cur, sql, (int(older_than_days),), "delete", "job_tasks")
-                affected = cur.rowcount or 0
-            con.commit()
+            while True:
+                sql = """
+                    DELETE FROM job_tasks
+                    WHERE status = 'queued'
+                      AND created_at < (NOW() - INTERVAL %s DAY)
+                    LIMIT %s
+                """
+                with con.cursor() as cur:
+                    self._execute_query(cur, sql, (int(older_than_days), batch_size), "delete", "job_tasks")
+                    affected = cur.rowcount or 0
+                    total_affected += affected
+                con.commit()
+                
+                if affected < batch_size:
+                    break
         finally:
             self._return(con)
-        return int(affected)
+        return int(total_affected)
 
-    def cleanup_finished_tasks(self, older_than_days: int = 90) -> int:
-        """Elimina tasks 'ok'/'error' muy viejas para limitar el tamaño de la tabla."""
+    def cleanup_finished_tasks(self, older_than_days: int = 90, batch_size: int = 1000) -> int:
+        """
+        Elimina tasks 'ok'/'error' muy viejas para limitar el tamaño de la tabla.
+        Procesa por lotes para evitar locks largos.
+        
+        Args:
+            older_than_days: Días de antigüedad para considerar una tarea como antigua
+            batch_size: Número máximo de filas a eliminar por lote
+            
+        Returns:
+            Total de tareas eliminadas
+        """
+        total_affected = 0
+        con = self._connect()
+        try:
+            while True:
+                sql = """
+                    DELETE FROM job_tasks
+                    WHERE status IN ('ok','error')
+                      AND finished_at IS NOT NULL
+                      AND finished_at < (NOW() - INTERVAL %s DAY)
+                    LIMIT %s
+                """
+                with con.cursor() as cur:
+                    self._execute_query(cur, sql, (int(older_than_days), batch_size), "delete", "job_tasks")
+                    affected = cur.rowcount or 0
+                    total_affected += affected
+                con.commit()
+                
+                if affected < batch_size:
+                    break
+        finally:
+            self._return(con)
+        return int(total_affected)
+    
+    def cleanup_orphaned_jobs(self, older_than_days: int = 7) -> int:
+        """
+        Elimina jobs que no tienen tareas asociadas (huérfanos).
+        
+        Args:
+            older_than_days: Días de antigüedad mínima para considerar un job como huérfano
+            
+        Returns:
+            Número de jobs eliminados
+        """
         sql = """
-            DELETE FROM job_tasks
-            WHERE status IN ('ok','error')
-              AND finished_at IS NOT NULL
-              AND finished_at < (NOW() - INTERVAL %s DAY)
+            DELETE j FROM jobs j
+            LEFT JOIN job_tasks jt ON j.id = jt.job_id
+            WHERE jt.job_id IS NULL
+              AND j.created_at < (NOW() - INTERVAL %s DAY)
         """
         con = self._connect()
         try:
             with con.cursor() as cur:
-                self._execute_query(cur, sql, (int(older_than_days),), "delete", "job_tasks")
+                self._execute_query(cur, sql, (int(older_than_days),), "delete", "jobs")
                 affected = cur.rowcount or 0
             con.commit()
         finally:
@@ -536,7 +596,7 @@ class JobStoreSQL(JobStorePort):
             select_params = (account_id, limit)
         sql_update = """
             UPDATE job_tasks
-            SET status = 'sent', sent_at = NOW(), updated_at = NOW()
+            SET status = 'sent', sent_at = NOW(), leased_at = NOW(), updated_at = NOW()
             WHERE (job_id, task_id) IN (%s)
         """
         leased: List[Dict[str, Any]] = []
@@ -546,7 +606,7 @@ class JobStoreSQL(JobStorePort):
             try:
                 with con.cursor() as cur:
                     cur.execute("START TRANSACTION;")
-                    self._execute_query(cur, sql_select, (account_id, limit), "select", "job_tasks")
+                    self._execute_query(cur, sql_select, select_params, "select", "job_tasks")
                     rows = cur.fetchall() or []
                     if not rows:
                         con.commit()
@@ -574,6 +634,34 @@ class JobStoreSQL(JobStorePort):
             self._return(con)
         return leased
 
+    def reclaim_expired_leases(self, max_reclaimed: int = 100) -> int:
+        """
+        Reencola tareas con leases expirados.
+        
+        Busca tareas en estado 'sent' con leased_at expirado (según lease_ttl)
+        y las reencola a 'queued' para que puedan ser procesadas nuevamente.
+        """
+        sql = """
+            UPDATE job_tasks
+            SET status = 'queued',
+                leased_at = NULL,
+                updated_at = NOW()
+            WHERE status = 'sent'
+              AND leased_at IS NOT NULL
+              AND leased_at < DATE_SUB(NOW(), INTERVAL COALESCE(lease_ttl, 300) SECOND)
+            LIMIT %s
+        """
+        
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (max_reclaimed,), "update", "job_tasks")
+                reclaimed = cur.rowcount
+            con.commit()
+            return reclaimed
+        finally:
+            self._return(con)
+
     def release_task(self, job_id: str, task_id: str, error: Optional[str]) -> None:
         """
         Si `error` viene con texto, marcamos la task como 'error'. Si es None,
@@ -582,14 +670,14 @@ class JobStoreSQL(JobStorePort):
         if error:
             sql = """
                 UPDATE job_tasks
-                SET status='error', error_msg=%s, updated_at=NOW()
+                SET status='error', error_msg=%s, finished_at=NOW(), leased_at=NULL, updated_at=NOW()
                 WHERE job_id=%s AND task_id=%s
             """
             args = (error[:2000], job_id, task_id)
         else:
             sql = """
                 UPDATE job_tasks
-                SET status='queued', updated_at=NOW()
+                SET status='queued', leased_at=NULL, updated_at=NOW()
                 WHERE job_id=%s AND task_id=%s
             """
             args = (job_id, task_id)

@@ -446,28 +446,28 @@ class TestJobStoreSQL:
     
     def test_cleanup_stale_tasks(self, job_store, mock_pymysql_connection, mock_cursor):
         """Limpiar tareas antiguas en estado queued."""
-        # cleanup_stale_tasks usa 'with self._connect() as con:' y 'with con.cursor() as cur:'
-        # El código lee: affected = cur.rowcount or 0
-        # Crear un cursor mock específico para este test con rowcount como atributo real
+        # cleanup_stale_tasks ahora procesa por lotes
         cleanup_cursor = Mock()
         cleanup_cursor.__enter__ = Mock(return_value=cleanup_cursor)
         cleanup_cursor.__exit__ = Mock(return_value=False)
         cleanup_cursor.execute = Mock(return_value=None)
-        cleanup_cursor.rowcount = 10
+        cleanup_cursor.rowcount = 10  # Primera pasada elimina 10, segunda elimina 0 (termina loop)
         mock_pymysql_connection.cursor.return_value = cleanup_cursor
         
-        result = job_store.cleanup_stale_tasks(older_than_days=1)
+        result = job_store.cleanup_stale_tasks(older_than_days=1, batch_size=1000)
         
         assert result == 10
         sql_called = cleanup_cursor.execute.call_args[0][0]
         assert "DELETE FROM job_tasks" in sql_called
         assert "status = 'queued'" in sql_called
         assert "INTERVAL" in sql_called
+        assert "LIMIT" in sql_called
         
         params = cleanup_cursor.execute.call_args[0][1]
         assert params[0] == 1  # older_than_days
+        assert params[1] == 1000  # batch_size
         
-        mock_pymysql_connection.commit.assert_called_once()
+        mock_pymysql_connection.commit.assert_called()
     
     def test_cleanup_finished_tasks(self, job_store, mock_pymysql_connection, mock_cursor):
         """Limpiar tareas finalizadas antiguas."""
@@ -475,19 +475,105 @@ class TestJobStoreSQL:
         cleanup_cursor.__enter__ = Mock(return_value=cleanup_cursor)
         cleanup_cursor.__exit__ = Mock(return_value=False)
         cleanup_cursor.execute = Mock(return_value=None)
-        cleanup_cursor.rowcount = 50
+        cleanup_cursor.rowcount = 50  # Primera pasada elimina 50, segunda elimina 0 (termina loop)
         mock_pymysql_connection.cursor.return_value = cleanup_cursor
         
-        result = job_store.cleanup_finished_tasks(older_than_days=90)
+        result = job_store.cleanup_finished_tasks(older_than_days=90, batch_size=1000)
         
         assert result == 50
         sql_called = cleanup_cursor.execute.call_args[0][0]
         assert "DELETE FROM job_tasks" in sql_called
         assert "status IN ('ok','error')" in sql_called
         assert "finished_at" in sql_called
+        assert "LIMIT" in sql_called
         
         params = cleanup_cursor.execute.call_args[0][1]
         assert params[0] == 90
+        assert params[1] == 1000  # batch_size
+        
+        mock_pymysql_connection.commit.assert_called()
+    
+    def test_lease_tasks_sets_leased_at(self, job_store, mock_pymysql_connection, mock_cursor):
+        """Verificar que lease_tasks guarda leased_at al leasear."""
+        mock_cursor.fetchall.return_value = [
+            {
+                "job_id": "job1",
+                "task_id": "task1",
+                "username": "user1",
+                "payload_json": '{"action": "send"}'
+            },
+        ]
+        
+        job_store.lease_tasks("account1", limit=5, client_id="default")
+        
+        # Verificar que el UPDATE incluye leased_at
+        sql_update = None
+        for call in mock_cursor.execute.call_args_list:
+            sql = call[0][0] if call[0] else ""
+            if "UPDATE job_tasks" in sql and "status = 'sent'" in sql:
+                sql_update = sql
+                break
+        
+        assert sql_update is not None
+        assert "leased_at = NOW()" in sql_update
+    
+    def test_reclaim_expired_leases(self, job_store, mock_pymysql_connection, mock_cursor):
+        """Reencolar tareas con leases expirados."""
+        cleanup_cursor = Mock()
+        cleanup_cursor.__enter__ = Mock(return_value=cleanup_cursor)
+        cleanup_cursor.__exit__ = Mock(return_value=False)
+        cleanup_cursor.execute = Mock(return_value=None)
+        cleanup_cursor.rowcount = 5
+        mock_pymysql_connection.cursor.return_value = cleanup_cursor
+        
+        result = job_store.reclaim_expired_leases(max_reclaimed=100)
+        
+        assert result == 5
+        sql_called = cleanup_cursor.execute.call_args[0][0]
+        assert "UPDATE job_tasks" in sql_called
+        assert "status = 'queued'" in sql_called
+        assert "leased_at = NULL" in sql_called
+        assert "status = 'sent'" in sql_called
+        assert "leased_at IS NOT NULL" in sql_called
+        assert "DATE_SUB(NOW(), INTERVAL COALESCE(lease_ttl, 300) SECOND)" in sql_called
+        
+        params = cleanup_cursor.execute.call_args[0][1]
+        assert params[0] == 100  # max_reclaimed
         
         mock_pymysql_connection.commit.assert_called_once()
+    
+    def test_reclaim_expired_leases_empty(self, job_store, mock_pymysql_connection, mock_cursor):
+        """Retorna 0 si no hay leases expirados."""
+        cleanup_cursor = Mock()
+        cleanup_cursor.__enter__ = Mock(return_value=cleanup_cursor)
+        cleanup_cursor.__exit__ = Mock(return_value=False)
+        cleanup_cursor.execute = Mock(return_value=None)
+        cleanup_cursor.rowcount = 0
+        mock_pymysql_connection.cursor.return_value = cleanup_cursor
+        
+        result = job_store.reclaim_expired_leases(max_reclaimed=100)
+        
+        assert result == 0
+    
+    def test_mark_task_ok_clears_leased_at(self, job_store, mock_pymysql_connection, mock_cursor):
+        """Verificar que mark_task_ok limpia leased_at."""
+        job_store.mark_task_ok("job123", "task456", result={"success": True})
+        
+        sql_called = mock_cursor.execute.call_args[0][0]
+        assert "leased_at=NULL" in sql_called
+    
+    def test_mark_task_error_clears_leased_at(self, job_store, mock_pymysql_connection, mock_cursor):
+        """Verificar que mark_task_error limpia leased_at."""
+        job_store.mark_task_error("job123", "task456", "Error message")
+        
+        sql_called = mock_cursor.execute.call_args[0][0]
+        assert "leased_at=NULL" in sql_called
+    
+    def test_release_task_clears_leased_at(self, job_store, mock_pymysql_connection, mock_cursor):
+        """Verificar que release_task limpia leased_at cuando se libera sin error."""
+        job_store.release_task("job123", "task456", error=None)
+        
+        sql_called = mock_cursor.execute.call_args[0][0]
+        assert "status='queued'" in sql_called
+        assert "leased_at=NULL" in sql_called
 

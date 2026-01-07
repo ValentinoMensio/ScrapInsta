@@ -18,8 +18,9 @@ Sistema profesional y escalable para scraping, análisis y envío de mensajes en
 - 🏥 **Health Checks**: Endpoints `/health`, `/ready`, `/live`
 - 🔄 **Exception Handlers**: Manejo centralizado y consistente de errores
 - 🗄️ **Migraciones DB**: Alembic para gestión de esquema
-- ✅ **Testing**: 320+ tests con 77%+ cobertura
+- ✅ **Testing**: 328+ tests con 78%+ cobertura
 - 📦 **Cola Externa**: Soporte para SQS FIFO o cola local
+- ⏱️ **Leasing con TTL**: Recuperación automática de tareas bloqueadas
 
 ## Inicio rápido
 
@@ -44,6 +45,8 @@ Este script configura todo automáticamente:
 - Base de datos MySQL
 - API (puerto 8000)
 - Workers y dispatcher
+
+**Nota:** El proceso de limpieza de leases está integrado en el dispatcher y se ejecuta automáticamente. Ver sección "Arquitectura > Leasing con TTL" para más detalles.
 
 ### 3. Verificar que funciona
 
@@ -140,6 +143,16 @@ curl -X POST http://localhost:8000/api/send/pull \
 - `LOG_LEVEL`: Nivel de logging (`INFO`, `DEBUG`, `WARNING`, `ERROR`)
 - `LOG_FORMAT`: Formato de logs (`text` o `json`)
 
+#### Leasing con TTL
+- `LEASE_CLEANUP_INTERVAL`: Intervalo en segundos entre ejecuciones del proceso de limpieza (default: `60`)
+- `LEASE_CLEANUP_MAX_RECLAIMED`: Número máximo de tareas a reencolar por ejecución (default: `100`)
+
+#### Cleanup de Tareas Antiguas (Mantenimiento)
+- `CLEANUP_INTERVAL`: Intervalo en segundos entre ejecuciones del cleanup (default: `86400` = 24 horas)
+- `CLEANUP_STALE_DAYS`: Días de antigüedad para eliminar tareas 'queued' sin procesar (default: `1`)
+- `CLEANUP_FINISHED_DAYS`: Días de antigüedad para eliminar tareas 'ok'/'error' finalizadas (default: `90`)
+- `CLEANUP_BATCH_SIZE`: Tamaño del lote para procesamiento por lotes (default: `1000`)
+
 #### IA (Opcional)
 - `OPENAI_API_KEY`: Para composición de mensajes con IA
 
@@ -177,6 +190,12 @@ curl http://localhost:8000/metrics/json | jq .
 - `rate_limit_hits_total`: Hits de rate limiting
 - `tasks_processed_total`: Tareas procesadas por workers
 - `jobs_created_total`: Jobs creados
+- `cleanup_operations_total`: Operaciones de cleanup ejecutadas por tipo
+- `cleanup_rows_deleted_total`: Filas eliminadas por operación y tabla
+- `cleanup_duration_seconds`: Duración de operaciones de cleanup
+- `cleanup_last_run_timestamp`: Timestamp de última ejecución por tipo
+- `lease_cleanup_reclaimed_total`: Tareas reencoladas desde leases expirados
+- `lease_cleanup_duration_seconds`: Duración del proceso de lease cleanup
 - Y más...
 
 ### Health Checks
@@ -248,6 +267,7 @@ src/scrapinsta/
 │   └── browser/         # Adaptador Selenium
 ├── interface/           # Capa de interfaz
 │   ├── api.py           # API REST FastAPI
+│   ├── lease_cleanup.py # Proceso de limpieza de leases expirados
 │   └── queues/          # Colas (local/SQS)
 ├── crosscutting/        # Concerns transversales
 │   ├── exceptions.py     # Excepciones HTTP personalizadas
@@ -287,9 +307,9 @@ pytest tests/unit/ -v
 ```
 
 **Estado actual:**
-- ✅ 320+ tests pasando
-- ✅ 77%+ cobertura de código
-- ✅ Tests de integración para API, autenticación, exception handlers
+- ✅ 328+ tests pasando
+- ✅ 78%+ cobertura de código
+- ✅ Tests de integración para API, autenticación, exception handlers, leasing
 - ✅ Tests unitarios para lógica de negocio
 
 ## Seguridad
@@ -341,6 +361,24 @@ Soporte para dos backends de cola:
 
 Configuración mediante `QUEUES_BACKEND` en `.env`.
 
+### Leasing con TTL
+
+Sistema de recuperación automática de tareas bloqueadas:
+
+- **TTL configurable**: Cada tarea tiene un `lease_ttl` (default: 300 segundos / 5 minutos)
+- **Recuperación automática**: El dispatcher ejecuta limpieza periódica de leases expirados
+- **Resiliencia**: Si un worker muere, las tareas se recuperan automáticamente
+- **Integrado**: El proceso de limpieza está integrado en el dispatcher (no requiere proceso separado)
+
+**Configuración:**
+```bash
+# Variables de entorno (opcional, en .env)
+LEASE_CLEANUP_INTERVAL=60  # Segundos entre ejecuciones (default: 60)
+LEASE_CLEANUP_MAX_RECLAIMED=100  # Máximo de tareas por ejecución (default: 100)
+```
+
+**Nota:** El proceso de limpieza se ejecuta automáticamente dentro del dispatcher. Si prefieres ejecutarlo como proceso separado, puedes usar `python -m scrapinsta.interface.lease_cleanup`.
+
 ## Despliegue
 
 ### Requisitos
@@ -371,6 +409,8 @@ Configuración mediante `QUEUES_BACKEND` en `.env`.
    ```bash
    alembic upgrade head
    ```
+
+5. **El proceso de limpieza de leases se ejecuta automáticamente** dentro del dispatcher. No requiere configuración adicional.
 
 Ver [docs/SEGURIDAD_HTTPS.md](docs/SEGURIDAD_HTTPS.md) para guía completa de producción.
 

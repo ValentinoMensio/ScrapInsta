@@ -195,3 +195,56 @@ class JobStorePort(Protocol):
             error: Mensaje de error si hubo fallo, None si solo se libera
         """
         ...
+
+    def cleanup_stale_tasks(self, older_than_days: int = 1, batch_size: int = 1000) -> int:
+        """
+        Elimina tasks 'queued' antiguas para mantener limpia la tabla.
+        
+        Args:
+            older_than_days: Días de antigüedad
+            batch_size: Tamaño del lote para procesamiento
+            
+        Returns:
+            Total de tareas eliminadas
+        """
+        ...
+    
+    def cleanup_finished_tasks(self, older_than_days: int = 90, batch_size: int = 1000) -> int:
+        """
+        Elimina tasks 'ok'/'error' muy viejas para limitar el tamaño de la tabla.
+        
+        Args:
+            older_than_days: Días de antigüedad
+            batch_size: Tamaño del lote para procesamiento
+            
+        Returns:
+            Total de tareas eliminadas
+        """
+        ...
+    
+    def cleanup_orphaned_jobs(self, older_than_days: int = 7) -> int:
+        """
+        Elimina jobs que no tienen tareas asociadas (huérfanos).
+        
+        Args:
+            older_than_days: Días de antigüedad mínima
+            
+        Returns:
+            Número de jobs eliminados
+        """
+        ...
+
+    def reclaim_expired_leases(self, max_reclaimed: int = 100) -> int:
+        """
+        Reencola tareas con leases expirados.
+        
+        Busca tareas en estado 'sent' con leased_at expirado (según lease_ttl)
+        y las reencola a 'queued' para que puedan ser procesadas nuevamente.
+        
+        Args:
+            max_reclaimed: Número máximo de tareas a reencolar por ejecución
+            
+        Returns:
+            Número de tareas reencoladas
+        """
+        ...

@@ -119,7 +119,10 @@ CREATE TABLE job_tasks (
   updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   sent_at TIMESTAMP NULL DEFAULT NULL,
   finished_at TIMESTAMP NULL DEFAULT NULL,
+  leased_at TIMESTAMP NULL DEFAULT NULL,
+  lease_ttl INT DEFAULT 300,
   INDEX idx_job_tasks_account_status_created (account_id, status, created_at),
+  INDEX idx_job_tasks_status_leased (status, leased_at),
   UNIQUE KEY uk_task_id (task_id),
   UNIQUE KEY uk_job_username_account (job_id, username, account_id),
   FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
