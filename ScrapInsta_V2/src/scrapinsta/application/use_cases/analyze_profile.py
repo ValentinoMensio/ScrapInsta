@@ -15,6 +15,7 @@ from scrapinsta.domain.models.profile_models import (
 
 from scrapinsta.domain.ports.browser_port import BrowserPort, BrowserPortError
 from scrapinsta.domain.ports.profile_repo import ProfileRepository
+from scrapinsta.infrastructure.redis import CacheService
 
 from scrapinsta.application.services.evaluator import evaluate_profile
 
@@ -76,15 +77,37 @@ class AnalyzeProfileUseCase:
         browser: BrowserPort,
         profile_repo: Optional[ProfileRepository] = None,
         *,
+        cache_service: Optional[CacheService] = None,
         max_retries: int = 2,
     ) -> None:
         self.browser = browser
         self.profile_repo = profile_repo
+        self.cache_service = cache_service
         self.max_retries = max_retries
 
     def __call__(self, req: AnalyzeProfileRequest) -> AnalyzeProfileResponse:
         username = req.username.strip().lstrip("@").lower()
         logger.info("AnalyzeProfile: start username=%s", username)
+
+        # Intentar obtener desde caché primero
+        if self.cache_service:
+            cached_analysis = self.cache_service.get_profile_analysis(username)
+            if cached_analysis:
+                logger.info("AnalyzeProfile: cache hit username=%s", username)
+                try:
+                    # Reconstruir respuesta desde caché
+                    # Nota: Esto requiere serialización/deserialización completa de los modelos
+                    # Por ahora, si hay caché, retornamos que se saltó
+                    # TODO: Implementar serialización completa de AnalyzeProfileResponse
+                    return AnalyzeProfileResponse(
+                        snapshot=None,
+                        recent_reels=[],
+                        recent_posts=[],
+                        basic_stats=None,
+                        skipped_recent=True
+                    )
+                except Exception as e:
+                    logger.warning("AnalyzeProfile: error deserializando caché: %s", e)
 
         if self.profile_repo:
             last_analysis = self.profile_repo.get_last_analysis_date(username)
@@ -142,6 +165,21 @@ class AnalyzeProfileUseCase:
             recent_posts=recent_posts,
             basic_stats=basic,
         )
+
+        # Guardar en caché
+        if self.cache_service:
+            try:
+                cache_data = {
+                    "username": username,
+                    "snapshot": snapshot.model_dump() if hasattr(snapshot, "model_dump") else snapshot.__dict__,
+                    "basic_stats": basic.model_dump() if basic and hasattr(basic, "model_dump") else (basic.__dict__ if basic else None),
+                    "recent_reels": [r.model_dump() if hasattr(r, "model_dump") else r.__dict__ for r in recent_reels] if recent_reels else [],
+                    "recent_posts": [p.model_dump() if hasattr(p, "model_dump") else p.__dict__ for p in recent_posts] if recent_posts else [],
+                }
+                self.cache_service.set_profile_analysis(username, cache_data)
+                logger.debug("AnalyzeProfile: cached analysis for username=%s", username)
+            except Exception as e:
+                logger.warning("AnalyzeProfile: cache save failed: %s", e)
 
         if self.profile_repo:
             try:

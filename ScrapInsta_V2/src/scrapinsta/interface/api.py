@@ -15,6 +15,7 @@ from scrapinsta.config.settings import Settings
 from scrapinsta.infrastructure.db.job_store_sql import JobStoreSQL
 from scrapinsta.infrastructure.db.client_repo_sql import ClientRepoSQL
 from scrapinsta.infrastructure.auth.jwt_auth import create_access_token, verify_token, get_client_id_from_token
+from scrapinsta.infrastructure.redis import RedisClient, DistributedRateLimiter, get_redis_client
 from passlib.context import CryptContext
 from scrapinsta.crosscutting.logging_config import (
     configure_structured_logging,
@@ -58,6 +59,15 @@ logger.info("api_started", db_dsn=_settings.db_dsn)
 _job_store = JobStoreSQL(_settings.db_dsn)
 _client_repo = ClientRepoSQL(_settings.db_dsn)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Redis para rate limiting distribuido y caché
+_redis_client_wrapper = RedisClient(_settings)
+_redis_client = _redis_client_wrapper.client
+_distributed_rate_limiter = DistributedRateLimiter(_redis_client)
+
+# Fallback al rate limiter en memoria si Redis no está disponible
+if not _distributed_rate_limiter.enabled:
+    logger.warning("redis_unavailable", fallback="memory_rate_limiter")
 
 
 class ObservabilityMiddleware(BaseHTTPMiddleware):
@@ -427,36 +437,92 @@ def _rate_limit(client: Dict[str, Any], req: Request) -> None:
     ip = req.headers.get("x-forwarded-for", req.client.host if req.client else "-").split(",")[0].strip()
     endpoint = req.url.path
     
-    if not _rate.allow(f"client:{client['id']}", rpm):
-        rate_limit_hits_total.labels(
-            client_id=client['id'],
-            endpoint=endpoint,
-        ).inc()
-        logger.warning(
-            "rate_limit_hit",
-            client_id=client['id'],
-            endpoint=endpoint,
-            limit_type="client",
-        )
-        raise RateLimitError(
-            "Límite de tasa excedido para el cliente",
-            details={"client_id": client['id'], "endpoint": endpoint, "limit_type": "client"}
-        )
-    if not _rate.allow(f"ip:{ip}", max(60, rpm)):
-        rate_limit_hits_total.labels(
-            client_id="ip",
-            endpoint=endpoint,
-        ).inc()
-        logger.warning(
-            "rate_limit_hit",
-            ip=ip,
-            endpoint=endpoint,
-            limit_type="ip",
-        )
-        raise RateLimitError(
-            "Límite de tasa excedido para la IP",
-            details={"ip": ip, "endpoint": endpoint, "limit_type": "ip"}
-        )
+    # Intentar usar rate limiting distribuido (Redis)
+    if _distributed_rate_limiter.enabled:
+        # Rate limit por cliente
+        allowed, retry_after = _distributed_rate_limiter.allow(f"client:{client['id']}", rpm)
+        if not allowed:
+            rate_limit_hits_total.labels(
+                client_id=client['id'],
+                endpoint=endpoint,
+            ).inc()
+            logger.warning(
+                "rate_limit_hit",
+                client_id=client['id'],
+                endpoint=endpoint,
+                limit_type="client",
+                retry_after=retry_after,
+                backend="redis",
+            )
+            raise RateLimitError(
+                "Límite de tasa excedido para el cliente",
+                details={
+                    "client_id": client['id'],
+                    "endpoint": endpoint,
+                    "limit_type": "client",
+                    "retry_after": retry_after,
+                }
+            )
+        
+        # Rate limit por IP (mínimo 60 RPM)
+        ip_rpm = max(60, rpm)
+        allowed, retry_after = _distributed_rate_limiter.allow(f"ip:{ip}", ip_rpm)
+        if not allowed:
+            rate_limit_hits_total.labels(
+                client_id="ip",
+                endpoint=endpoint,
+            ).inc()
+            logger.warning(
+                "rate_limit_hit",
+                ip=ip,
+                endpoint=endpoint,
+                limit_type="ip",
+                retry_after=retry_after,
+                backend="redis",
+            )
+            raise RateLimitError(
+                "Límite de tasa excedido para la IP",
+                details={
+                    "ip": ip,
+                    "endpoint": endpoint,
+                    "limit_type": "ip",
+                    "retry_after": retry_after,
+                }
+            )
+    else:
+        # Fallback al rate limiter en memoria
+        if not _rate.allow(f"client:{client['id']}", rpm):
+            rate_limit_hits_total.labels(
+                client_id=client['id'],
+                endpoint=endpoint,
+            ).inc()
+            logger.warning(
+                "rate_limit_hit",
+                client_id=client['id'],
+                endpoint=endpoint,
+                limit_type="client",
+                backend="memory",
+            )
+            raise RateLimitError(
+                "Límite de tasa excedido para el cliente",
+                details={"client_id": client['id'], "endpoint": endpoint, "limit_type": "client"}
+            )
+        if not _rate.allow(f"ip:{ip}", max(60, rpm)):
+            rate_limit_hits_total.labels(
+                client_id="ip",
+                endpoint=endpoint,
+            ).inc()
+            logger.warning(
+                "rate_limit_hit",
+                ip=ip,
+                endpoint=endpoint,
+                limit_type="ip",
+                backend="memory",
+            )
+            raise RateLimitError(
+                "Límite de tasa excedido para la IP",
+                details={"ip": ip, "endpoint": endpoint, "limit_type": "ip"}
+            )
 
 
 def _get_client_account(x_account: Optional[str]) -> str:
@@ -509,16 +575,6 @@ class JobSummaryResponse(BaseModel):
     ok: int
     error: int
 
-
-
-class LoginRequest(BaseModel):
-    api_key: str = Field(..., description="API key del cliente")
-
-class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int = 3600
-    client_id: str
 
 @app.post("/api/auth/login", response_model=LoginResponse)
 def login(body: LoginRequest):

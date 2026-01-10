@@ -368,7 +368,7 @@ class JobStoreSQL(JobStorePort):
         con = self._connect()
         try:
             with con.cursor() as cur:
-                self._execute_query(cur, sql, (job_id,), "select", "job_tasks")
+                self._execute_query(cur, sql, params, "select", "job_tasks")
                 row = cur.fetchone() or {}
                 return {
                     "queued": int(row.get("queued", 0)),

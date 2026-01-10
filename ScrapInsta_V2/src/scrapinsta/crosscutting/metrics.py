@@ -132,6 +132,39 @@ lease_cleanup_duration_seconds = Histogram(
     buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0)
 )
 
+# Redis metrics
+redis_operations_total = Counter(
+    "redis_operations_total",
+    "Total Redis operations",
+    ["operation", "status"]
+)
+
+redis_operation_duration_seconds = Histogram(
+    "redis_operation_duration_seconds",
+    "Redis operation duration in seconds",
+    ["operation"],
+    buckets=(0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0)
+)
+
+redis_connection_status = Gauge(
+    "redis_connection_status",
+    "Redis connection status (1 = connected, 0 = disconnected)"
+)
+
+# Cache metrics
+cache_operations_total = Counter(
+    "cache_operations_total",
+    "Total cache operations",
+    ["operation", "result"]
+)
+
+cache_hit_rate = Histogram(
+    "cache_hit_rate",
+    "Cache hit rate per operation type",
+    ["operation_type"],
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+)
+
 def get_metrics() -> bytes:
     return generate_latest()
 

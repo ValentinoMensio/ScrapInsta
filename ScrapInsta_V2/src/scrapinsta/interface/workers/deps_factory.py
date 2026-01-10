@@ -22,6 +22,7 @@ from scrapinsta.infrastructure.browser.adapters.rate_limited_sender import RateL
 from scrapinsta.infrastructure.ai.chatgpt_openai import OpenAIMessageComposer
 from scrapinsta.infrastructure.db.connection_provider import make_mysql_conn_factory
 from scrapinsta.crosscutting.rate_limit import SlidingWindowRateLimiter, RateLimitConfig
+from scrapinsta.infrastructure.redis import RedisClient, CacheService
 
 from scrapinsta.application.use_cases.analyze_profile import AnalyzeProfileUseCase
 from scrapinsta.application.use_cases.fetch_followings import FetchFollowingsUseCase
@@ -135,8 +136,19 @@ class FactoryImpl(UseCaseFactory):
             )
         return self._composer
 
+    @property
+    def cache_service(self) -> Optional[CacheService]:
+        if not hasattr(self, "_cache_service"):
+            redis_client = RedisClient(self._settings)
+            self._cache_service = CacheService(redis_client.client, self._settings) if redis_client.enabled else None
+        return self._cache_service
+
     def create_analyze_profile(self) -> AnalyzeProfileUseCase:
-        return AnalyzeProfileUseCase(browser=self.browser, profile_repo=self.profile_repo)
+        return AnalyzeProfileUseCase(
+            browser=self.browser,
+            profile_repo=self.profile_repo,
+            cache_service=self.cache_service,
+        )
 
     def create_fetch_followings(self) -> FetchFollowingsUseCase:
         return FetchFollowingsUseCase(browser=self.browser, repo=self.followings_repo)

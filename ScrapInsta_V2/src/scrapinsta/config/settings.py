@@ -127,6 +127,21 @@ class Settings(BaseSettings):
     sqs_task_queue_url: Optional[str] = Field(default=None, env="SQS_TASK_QUEUE_URL")
     sqs_result_queue_url: Optional[str] = Field(default=None, env="SQS_RESULT_QUEUE_URL")
     aws_region: Optional[str] = Field(default=None, env="AWS_REGION")
+    
+    # --- Redis ---
+    redis_url: Optional[str] = Field(default=None, env="REDIS_URL")
+    redis_host: str = Field(default="127.0.0.1", env="REDIS_HOST")
+    redis_port: int = Field(default=6379, env="REDIS_PORT")
+    redis_db: int = Field(default=0, env="REDIS_DB")
+    redis_password: Optional[str] = Field(default=None, env="REDIS_PASSWORD")
+    redis_socket_timeout: float = Field(default=5.0, env="REDIS_SOCKET_TIMEOUT")
+    redis_socket_connect_timeout: float = Field(default=5.0, env="REDIS_SOCKET_CONNECT_TIMEOUT")
+    redis_max_connections: int = Field(default=50, env="REDIS_MAX_CONNECTIONS")
+    redis_decode_responses: bool = Field(default=True, env="REDIS_DECODE_RESPONSES")
+    
+    # --- Redis Cache TTLs ---
+    redis_cache_profile_ttl: int = Field(default=3600, env="REDIS_CACHE_PROFILE_TTL")  # 1 hora
+    redis_cache_analysis_ttl: int = Field(default=3600, env="REDIS_CACHE_ANALYSIS_TTL")  # 1 hora
 
     # ---------- Helpers de cuentas ----------
     def _read_json_from_path(self, path_str: Optional[str]) -> Optional[Any]:

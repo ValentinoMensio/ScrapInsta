@@ -7,7 +7,12 @@ from jose import JWTError, jwt
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", os.getenv("API_SHARED_SECRET", "change-me-in-production"))
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+# Configurable via env (documentado en MEJORAS_PROFESIONALES.md)
+try:
+    ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+except Exception:
+    ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:

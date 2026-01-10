@@ -281,6 +281,26 @@ class TestJobStoreSQL:
         assert "SUM(CASE WHEN status='sent'" in sql_called
         assert "SUM(CASE WHEN status='ok'" in sql_called
         assert "SUM(CASE WHEN status='error'" in sql_called
+
+    def test_job_summary_with_client_id(self, job_store, mock_pymysql_connection, mock_cursor):
+        """Obtener resumen de un job filtrando por client_id (join con jobs)."""
+        mock_cursor.fetchone.return_value = {
+            "queued": 1,
+            "sent": 2,
+            "ok": 3,
+            "error": 4
+        }
+        
+        result = job_store.job_summary("job123", client_id="default")
+        
+        assert result == {"queued": 1, "sent": 2, "ok": 3, "error": 4}
+        
+        sql_called = mock_cursor.execute.call_args[0][0]
+        assert "INNER JOIN jobs" in sql_called
+        assert "j.client_id=%s" in sql_called
+        
+        params = mock_cursor.execute.call_args[0][1]
+        assert params == ("job123", "default")
     
     def test_job_summary_empty(self, job_store, mock_pymysql_connection, mock_cursor):
         """Retorna ceros si no hay tareas."""
