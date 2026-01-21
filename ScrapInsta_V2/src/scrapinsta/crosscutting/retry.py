@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import logging
 import random
 import time
+import os
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Iterable, Optional, Tuple, Type, TypeVar, Literal
 
 from scrapinsta.config.settings import Settings
+from scrapinsta.crosscutting.logging_config import get_logger
 
-_log = logging.getLogger("Scrapinsta.retry")
+_log = get_logger("retry")
 
 
 T = TypeVar("T")
@@ -82,10 +83,16 @@ def _compute_sleep(
 
     sleep_s = max(0.05, sleep_s)  # Evitar sleeps ínfimos (busy-loop)
 
-    if _log.isEnabledFor(logging.DEBUG):
+    # structlog no expone isEnabledFor() como logging stdlib: usamos LOG_LEVEL.
+    if os.getenv("LOG_LEVEL", "INFO").upper() == "DEBUG":
         _log.debug(
-            "compute_sleep: attempt=%d base=%.3f backoff=%.3f jitter=%.3f strategy=%s -> sleep=%.3f",
-            attempt, base_delay, backoff, jitter, strategy, sleep_s,
+            "retry_compute_sleep",
+            attempt=attempt,
+            base_delay=base_delay,
+            backoff=backoff,
+            jitter=jitter,
+            strategy=str(strategy),
+            sleep_s=sleep_s,
         )
     return sleep_s
 

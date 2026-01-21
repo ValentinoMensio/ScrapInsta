@@ -238,10 +238,11 @@ class JobStoreSQL(JobStorePort):
             INSERT INTO job_tasks (job_id, task_id, correlation_id, account_id, username, payload_json, status, client_id)
             VALUES (%s, %s, %s, %s, %s, %s, 'queued', %s)
             ON DUPLICATE KEY UPDATE
-              correlation_id=VALUES(correlation_id),
-              account_id=VALUES(account_id),
-              username=VALUES(username),
-              payload_json=VALUES(payload_json),
+              -- Idempotencia real: NO pisar valores existentes si ya están seteados.
+              correlation_id=COALESCE(correlation_id, VALUES(correlation_id)),
+              account_id=COALESCE(account_id, VALUES(account_id)),
+              username=COALESCE(username, VALUES(username)),
+              payload_json=COALESCE(payload_json, VALUES(payload_json)),
               updated_at=CURRENT_TIMESTAMP
         """
         con = self._connect()
@@ -253,8 +254,13 @@ class JobStoreSQL(JobStorePort):
             self._return(con)
 
     def mark_task_sent(self, job_id: str, task_id: str) -> None:
-        """Marca task como 'sent' y setea sent_at."""
-        sql = "UPDATE job_tasks SET status='sent', sent_at=NOW() WHERE job_id=%s AND task_id=%s"
+        """
+        Marca task como 'sent' y setea sent_at.
+
+        Nota: también seteamos leased_at para habilitar recuperación automática vía
+        reclaim_expired_leases() si el worker muere o se pierde el resultado.
+        """
+        sql = "UPDATE job_tasks SET status='sent', sent_at=NOW(), leased_at=NOW(), updated_at=NOW() WHERE job_id=%s AND task_id=%s"
         con = self._connect()
         try:
             with con.cursor() as cur:
@@ -263,20 +269,127 @@ class JobStoreSQL(JobStorePort):
         finally:
             self._return(con)
 
+    def list_usernames_by_status(self, job_id: str, statuses: list[str]) -> set[str]:
+        """
+        Lista usernames de tasks para un job filtrando por estados.
+
+        Se usa para reconstruir 'pending' de forma idempotente al reiniciar:
+        - queued: pendientes de despachar
+        - sent: en vuelo (no redespachar)
+        - ok/error: ya finalizadas
+        """
+        if not statuses:
+            return set()
+        st = [str(s).strip().lower() for s in statuses if str(s).strip()]
+        if not st:
+            return set()
+        placeholders = ", ".join(["%s"] * len(st))
+        # Cinturón y tirantes multi-tenant/consistencia:
+        # Validamos que job_tasks.client_id coincida con jobs.client_id para ese job_id.
+        sql = f"""
+            SELECT jt.username
+            FROM job_tasks jt
+            INNER JOIN jobs j ON jt.job_id = j.id AND jt.client_id = j.client_id
+            WHERE jt.job_id=%s AND jt.status IN ({placeholders})
+              AND jt.username IS NOT NULL AND jt.username <> ''
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                params: tuple = (job_id, *st)
+                self._execute_query(cur, sql, params, "select", "job_tasks")
+                rows = cur.fetchall() or []
+                return {str(r.get("username")).strip().lower() for r in rows if (r.get("username") or "").strip()}
+        finally:
+            self._return(con)
+
+    def list_queued_usernames(self, job_id: str) -> set[str]:
+        """Atajo: usernames pendientes (status='queued') para un job."""
+        return self.list_usernames_by_status(job_id, ["queued"])
+
     def mark_task_ok(self, job_id: str, task_id: str, result: Optional[Dict[str, Any]]) -> None:
         """Marca task como 'ok' y cierra timestamps."""
-        sql = "UPDATE job_tasks SET status='ok', finished_at=NOW(), leased_at=NULL, updated_at=NOW() WHERE job_id=%s AND task_id=%s"
+        sql = (
+            "UPDATE job_tasks "
+            "SET status='ok', finished_at=NOW(), leased_at=NULL, lease_expires_at=NULL, leased_by=NULL, updated_at=NOW() "
+            "WHERE job_id=%s AND task_id=%s"
+        )
         con = self._connect()
         try:
             with con.cursor() as cur:
                 self._execute_query(cur, sql, (job_id, task_id), "update", "job_tasks")
             con.commit()
+        finally:
+            self._return(con)
+
+    def claim_task(self, job_id: str, task_id: str, account_id: str) -> bool:
+        """
+        Claim atómico de una task para ejecución (anti-duplicados con múltiples dispatchers).
+
+        Solo permite el claim si la task está en status='queued'.
+        Setea account_id, sent_at y leased_at (lease start) en el mismo UPDATE.
+        """
+        acc = _norm(account_id)
+        if not acc:
+            raise ValueError("account_id inválido para claim_task")
+        sql = """
+            UPDATE job_tasks jt
+            INNER JOIN jobs j ON jt.job_id = j.id AND jt.client_id = j.client_id
+            SET jt.status='sent',
+                jt.account_id=%s,
+                jt.sent_at=NOW(),
+                jt.leased_at=NOW(),
+                jt.lease_expires_at=DATE_ADD(NOW(), INTERVAL COALESCE(jt.lease_ttl, 300) SECOND),
+                jt.leased_by=NULL,
+                jt.attempts=COALESCE(jt.attempts, 0) + 1,
+                jt.updated_at=NOW()
+            WHERE jt.job_id=%s
+              AND jt.task_id=%s
+              AND jt.status='queued'
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (acc, job_id, task_id), "update", "job_tasks")
+                claimed = int(cur.rowcount or 0)
+            con.commit()
+            return claimed == 1
+        finally:
+            self._return(con)
+
+    def try_advisory_lock(self, name: str, timeout_s: int = 0) -> bool:
+        """
+        Advisory lock (MySQL GET_LOCK) para secciones críticas sin tocar schema.
+        Útil para evitar doble expansión Job→Tasks entre 2 dispatchers.
+        """
+        lock_name = str(name)
+        sql = "SELECT GET_LOCK(%s, %s) AS got"
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (lock_name, int(timeout_s)), "select", "jobs")
+                row = cur.fetchone() or {}
+                return int(row.get("got") or 0) == 1
+        finally:
+            self._return(con)
+
+    def release_advisory_lock(self, name: str) -> None:
+        sql = "SELECT RELEASE_LOCK(%s) AS released"
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (str(name),), "select", "jobs")
+                con.commit()
         finally:
             self._return(con)
 
     def mark_task_error(self, job_id: str, task_id: str, error: str) -> None:
         """Marca task como 'error' con mensaje (recortado a 2000 chars)."""
-        sql = "UPDATE job_tasks SET status='error', error_msg=%s, finished_at=NOW(), leased_at=NULL, updated_at=NOW() WHERE job_id=%s AND task_id=%s"
+        sql = (
+            "UPDATE job_tasks "
+            "SET status='error', error_msg=%s, finished_at=NOW(), leased_at=NULL, lease_expires_at=NULL, leased_by=NULL, updated_at=NOW() "
+            "WHERE job_id=%s AND task_id=%s"
+        )
         con = self._connect()
         try:
             with con.cursor() as cur:
@@ -596,7 +709,13 @@ class JobStoreSQL(JobStorePort):
             select_params = (account_id, limit)
         sql_update = """
             UPDATE job_tasks
-            SET status = 'sent', sent_at = NOW(), leased_at = NOW(), updated_at = NOW()
+            SET status = 'sent',
+                sent_at = NOW(),
+                leased_at = NOW(),
+                lease_expires_at = DATE_ADD(NOW(), INTERVAL COALESCE(lease_ttl, 300) SECOND),
+                leased_by = NULL,
+                attempts = COALESCE(attempts, 0) + 1,
+                updated_at = NOW()
             WHERE (job_id, task_id) IN (%s)
         """
         leased: List[Dict[str, Any]] = []
@@ -645,10 +764,18 @@ class JobStoreSQL(JobStorePort):
             UPDATE job_tasks
             SET status = 'queued',
                 leased_at = NULL,
+                lease_expires_at = NULL,
+                leased_by = NULL,
                 updated_at = NOW()
             WHERE status = 'sent'
-              AND leased_at IS NOT NULL
-              AND leased_at < DATE_SUB(NOW(), INTERVAL COALESCE(lease_ttl, 300) SECOND)
+              AND (
+                (lease_expires_at IS NOT NULL AND lease_expires_at < NOW())
+                OR (
+                  lease_expires_at IS NULL
+                  AND leased_at IS NOT NULL
+                  AND leased_at < DATE_SUB(NOW(), INTERVAL COALESCE(lease_ttl, 300) SECOND)
+                )
+              )
             LIMIT %s
         """
         
@@ -677,7 +804,7 @@ class JobStoreSQL(JobStorePort):
         else:
             sql = """
                 UPDATE job_tasks
-                SET status='queued', leased_at=NULL, updated_at=NOW()
+                SET status='queued', leased_at=NULL, lease_expires_at=NULL, leased_by=NULL, updated_at=NOW()
                 WHERE job_id=%s AND task_id=%s
             """
             args = (job_id, task_id)
@@ -686,5 +813,93 @@ class JobStoreSQL(JobStorePort):
             with con.cursor() as cur:
                 self._execute_query(cur, sql, args, "update", "job_tasks")
             con.commit()
+        finally:
+            self._return(con)
+
+    def requeue_task_with_attempts_cap(
+        self,
+        job_id: str,
+        task_id: str,
+        *,
+        max_attempts: int,
+        final_error_msg: str = "retry exhausted",
+    ) -> bool:
+        """
+        Reencola una task retryable si todavía no alcanzó el máximo de attempts.
+        - attempts se incrementa al hacer claim/lease (claim_task/lease_tasks).
+        - Si attempts >= max_attempts, se marca como error definitivo (evita loop infinito).
+
+        Returns:
+            True si se reencoló (status='queued'), False si se marcó error definitivo.
+        """
+        max_a = int(max_attempts or 0)
+        if max_a <= 0:
+            max_a = 1
+
+        sql = """
+            UPDATE job_tasks jt
+            INNER JOIN jobs j ON jt.job_id = j.id AND jt.client_id = j.client_id
+            SET
+                jt.status = CASE WHEN COALESCE(jt.attempts, 0) < %s THEN 'queued' ELSE 'error' END,
+                jt.leased_at = NULL,
+                jt.lease_expires_at = NULL,
+                jt.leased_by = NULL,
+                jt.finished_at = CASE WHEN COALESCE(jt.attempts, 0) < %s THEN NULL ELSE NOW() END,
+                jt.error_msg = CASE WHEN COALESCE(jt.attempts, 0) < %s THEN jt.error_msg ELSE %s END,
+                jt.updated_at = NOW()
+            WHERE jt.job_id=%s
+              AND jt.task_id=%s
+              AND jt.status='sent'
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(
+                    cur,
+                    sql,
+                    (max_a, max_a, max_a, str(final_error_msg or "retry exhausted"), job_id, task_id),
+                    "update",
+                    "job_tasks",
+                )
+                cur.execute(
+                    "SELECT COALESCE(attempts, 0) AS attempts FROM job_tasks WHERE job_id=%s AND task_id=%s",
+                    (job_id, task_id),
+                )
+                row = cur.fetchone() or {}
+                attempts = int(row.get("attempts") or 0)
+            con.commit()
+            return attempts < max_a
+        finally:
+            self._return(con)
+
+    def begin_task(self, job_id: str, task_id: str, account_id: str, leased_by: str) -> bool:
+        """
+        Idempotencia en consumer/worker ante doble delivery inevitable:
+        - Solo un worker puede "comenzar" una task (leased_by NULL -> set).
+        - Si ya está ok/error o ya tiene leased_by, se saltea.
+        """
+        acc = _norm(account_id)
+        who = str(leased_by or "").strip()
+        if not acc or not who:
+            return False
+        sql = """
+            UPDATE job_tasks jt
+            INNER JOIN jobs j ON jt.job_id = j.id AND jt.client_id = j.client_id
+            SET jt.leased_by=%s,
+                jt.updated_at=NOW()
+            WHERE jt.job_id=%s
+              AND jt.task_id=%s
+              AND jt.status='sent'
+              AND jt.account_id=%s
+              AND jt.leased_by IS NULL
+              AND (jt.lease_expires_at IS NULL OR jt.lease_expires_at >= NOW())
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (who, job_id, task_id, acc), "update", "job_tasks")
+                started = int(cur.rowcount or 0)
+            con.commit()
+            return started == 1
         finally:
             self._return(con)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import Optional, Callable
 
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -9,6 +8,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 
 from scrapinsta.domain.ports.browser_port import BrowserAuthError
+from scrapinsta.crosscutting.logging_config import get_logger
 from scrapinsta.infrastructure.auth.cookie_store import (
     has_sessionid,
     load_cookies,
@@ -16,7 +16,7 @@ from scrapinsta.infrastructure.auth.cookie_store import (
 )
 from scrapinsta.infrastructure.auth.login_flow import login_instagram
 
-logger = logging.getLogger(__name__)
+log = get_logger("session_service")
 
 
 def _is_logged_in(driver: WebDriver, timeout: int = 10) -> bool:
@@ -80,10 +80,10 @@ class SessionService:
         if not self._username:
             raise BrowserAuthError("Username vacío para sesión", username=self._username)
 
-        logger.info("[%s] Iniciando login interactivo…", self._username)
+        log.info("session_ensure_start", username=self._username)
 
         if self._try_cookies_first():
-            logger.info("[%s] Sesión verificada con cookies", self._username)
+            log.info("session_verified_with_cookies", username=self._username)
             return
 
         self._login_and_persist()
@@ -98,23 +98,23 @@ class SessionService:
         """
         try:
             if not has_sessionid(self._username):
-                logger.debug("[%s] No hay sessionid válido en cookies", self._username)
+                log.debug("cookies_no_valid_sessionid", username=self._username)
                 return False
 
             if not load_cookies(self._driver, self._username):
-                logger.debug("[%s] No se pudieron cargar cookies", self._username)
+                log.debug("cookies_load_failed", username=self._username)
                 return False
 
             self._driver.get(self._base_url)
             if _is_logged_in(self._driver, timeout=10):
                 return True
 
-            logger.debug("[%s] Cookies cargadas pero no se verificó sesión", self._username)
+            log.debug("cookies_loaded_but_not_logged_in", username=self._username)
             clear_cookies_file(self._username)
             return False
 
         except Exception as e:
-            logger.debug("[%s] Error usando cookies: %s", self._username, e, exc_info=True)
+            log.debug("cookies_flow_error", username=self._username, error=str(e))
             try:
                 clear_cookies_file(self._username)
             except Exception:

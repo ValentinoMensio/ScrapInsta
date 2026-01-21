@@ -1,10 +1,11 @@
 from __future__ import annotations
-import json, logging, time, os
+import json, time, os
 from pathlib import Path
 from typing import Any, Dict, Optional
 from scrapinsta.config.settings import Settings
+from scrapinsta.crosscutting.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+log = get_logger("cookie_store")
 
 def cookies_dir() -> Path:
     """Devuelve el directorio donde se guardan las cookies (según settings)."""
@@ -64,35 +65,35 @@ def has_sessionid(username: str) -> bool:
                     return True
         return False
     except Exception as e:
-        logger.warning("Error leyendo cookies %s: %s", path, e)
+        log.warning("cookies_read_failed", path=str(path), error=str(e))
         return False
 
 def save_cookies(driver, username: str) -> None:
     path = cookie_path(username)
     cookies = driver.get_cookies()
     path.write_text(json.dumps(cookies, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Cookies guardadas para %s en %s", username, path)
+    log.info("cookies_saved", username=username, path=str(path))
 
 def load_cookies(driver, username: str, *, base_url: str = "https://www.instagram.com/", require_sessionid: bool = True) -> bool:
     path = cookie_path(username)
     if not path.exists():
-        logger.info("No se encontró archivo de cookies para %s", username)
+        log.info("cookies_file_missing", username=username)
         return False
 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, list):
-            logger.warning("Archivo inválido de cookies: %s", path)
+            log.warning("cookies_file_invalid", path=str(path))
             return False
 
         if require_sessionid and not has_sessionid(username):
-            logger.info("Cookies de %s expiradas o sin sessionid", username)
+            log.info("cookies_missing_or_expired_sessionid", username=username)
             return False
 
         try:
             driver.get(base_url)
         except Exception:
-            logger.debug("Error navegando a %s antes de cargar cookies", base_url, exc_info=True)
+            log.debug("cookies_preload_nav_failed", base_url=base_url)
 
         loaded = 0
         for c in data:
@@ -105,13 +106,13 @@ def load_cookies(driver, username: str, *, base_url: str = "https://www.instagra
                 driver.add_cookie(cookie)
                 loaded += 1
             except Exception:
-                logger.debug("Error al añadir cookie %s", c.get("name"), exc_info=True)
+                log.debug("cookie_add_failed", name=c.get("name"))
 
-        logger.info("Cargadas %d cookies para %s", loaded, username)
+        log.info("cookies_loaded", username=username, loaded=loaded)
         return loaded > 0
 
     except Exception as e:
-        logger.error("Error cargando cookies %s: %s", path, e)
+        log.error("cookies_load_failed", path=str(path), error=str(e))
         return False
 
 def clear_cookies_file(username: str) -> None:
@@ -119,7 +120,7 @@ def clear_cookies_file(username: str) -> None:
     try:
         if path.exists():
             path.unlink()
-            logger.info("Archivo de cookies eliminado para %s", username)
+            log.info("cookies_file_deleted", username=username, path=str(path))
     except Exception:
-        logger.warning("No se pudo eliminar cookies %s", path, exc_info=True)
+        log.warning("cookies_file_delete_failed", username=username, path=str(path))
 

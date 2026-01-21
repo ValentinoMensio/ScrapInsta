@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging, time, random
+import time, random
 from typing import Callable, Optional, List, Tuple
 
 from selenium.webdriver.common.by import By
@@ -15,6 +15,7 @@ from selenium.common.exceptions import (
 
 from scrapinsta.infrastructure.auth.cookie_store import save_cookies, clear_cookies_file
 from scrapinsta.domain.ports.browser_port import BrowserAuthError
+from scrapinsta.crosscutting.logging_config import get_logger
 
 try:
     from scrapinsta.crosscutting.human.tempo import sleep_jitter as _hsleep
@@ -22,7 +23,7 @@ except Exception:
     def _hsleep(a: float, b: float) -> None:
         time.sleep(max(0.0, (a + b) / 2.0))
 
-logger = logging.getLogger(__name__)
+log = get_logger("login_flow")
 
 
 # ---------------------------
@@ -49,10 +50,10 @@ def _accept_cookies_banner(driver: WebDriver, timeout: int = 8) -> None:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
         _hsleep(0.2, 0.4)
         el.click()
-        logger.debug("[auth] Banner de cookies aceptado")
+        log.debug("auth_cookies_banner_accepted")
         _hsleep(0.5, 0.9)
     except Exception:
-        logger.debug("[auth] Sin banner de cookies (ok)")
+        log.debug("auth_cookies_banner_not_present")
 
 
 def _extract_error_banner(driver: WebDriver) -> str | None:
@@ -116,10 +117,10 @@ def _handle_save_login_info_popup(driver: WebDriver, timeout: int = 6) -> None:
             )
         )
         btn.click()
-        logger.debug("[auth] Dismiss 'Guardar info de inicio de sesión'")
+        log.debug("auth_save_login_info_popup_dismissed")
         _hsleep(0.4, 0.8)
     except Exception:
-        logger.debug("[auth] No apareció popup 'Guardar info' (ok)")
+        log.debug("auth_save_login_info_popup_not_present")
 
 
 def _type_slow(el, text: str, min_pause: float = 0.045, max_pause: float = 0.11) -> None:
@@ -146,10 +147,50 @@ def _paste_text(el, text: str) -> None:
 
 
 def _locate_inputs(driver: WebDriver, wait_s: int) -> Tuple:
-    """Localiza username/password con el patrón de la versión vieja (funcional)."""
+    """
+    Localiza inputs de login.
+    Instagram cambia frecuentemente los atributos; soportamos variantes comunes:
+    - user: name="username" (legacy) o name="email" (actual), autocomplete="username"
+    - pass: name="password" (legacy) o name="pass" (actual)
+    """
     wait = WebDriverWait(driver, wait_s)
-    user_input = wait.until(EC.presence_of_element_located((By.NAME, "username")))
-    pass_input = driver.find_element(By.NAME, "password")
+
+    # Username/email (usar any_of para evitar timeouts secuenciales largos)
+    try:
+        user_input = wait.until(
+            EC.any_of(
+                EC.presence_of_element_located((By.NAME, "username")),
+                EC.presence_of_element_located((By.NAME, "email")),
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input[autocomplete*='username']")),
+                # fallback extra (Instagram cambia atributos seguido)
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='text'][name]")),
+            )
+        )
+    except TimeoutException:
+        log.error(
+            "auth_login_input_username_not_found",
+            url=(driver.current_url or ""),
+            title=(getattr(driver, "title", "") or ""),
+        )
+        raise
+
+    # Password
+    try:
+        pass_input = wait.until(
+            EC.any_of(
+                EC.presence_of_element_located((By.NAME, "password")),
+                EC.presence_of_element_located((By.NAME, "pass")),
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='password']")),
+            )
+        )
+    except TimeoutException:
+        log.error(
+            "auth_login_input_password_not_found",
+            url=(driver.current_url or ""),
+            title=(getattr(driver, "title", "") or ""),
+        )
+        raise
+
     return user_input, pass_input
 
 
@@ -157,7 +198,26 @@ def _click_submit_strict(driver: WebDriver, wait_s: int) -> None:
     """
     Plan A — Estilo viejo (que te funcionaba): botón submit simple.
     """
-    btn = driver.find_element(By.XPATH, "//button[@type='submit']")
+    wait = WebDriverWait(driver, max(3, int(wait_s)))
+    # 1) Botón submit clásico
+    try:
+        btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@type='submit']")))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+        _hsleep(0.15, 0.3)
+        btn.click()
+        return
+    except Exception:
+        pass
+
+    # 2) Div role=button con texto "Iniciar sesión" / "Log In" (nuevo UI)
+    btn = wait.until(
+        EC.element_to_be_clickable(
+            (
+                By.XPATH,
+                "//*[@role='button'][.//span[normalize-space()='Iniciar sesión' or normalize-space()='Log In']]",
+            )
+        )
+    )
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
     _hsleep(0.15, 0.3)
     btn.click()
@@ -176,6 +236,7 @@ def _click_submit_fallbacks(driver: WebDriver, password_input, login_url: str) -
         (By.XPATH, "//div//button[@type='submit']"),
         (By.XPATH, "//button[normalize-space()='Iniciar sesión' or normalize-space()='Log In']"),
         (By.XPATH, "//button[.//div[text()='Iniciar sesión'] or .//div[text()='Log In']]"),
+        (By.XPATH, "//*[@role='button'][.//span[normalize-space()='Iniciar sesión' or normalize-space()='Log In']]"),
     ]
     for by, sel in selectors:
         try:
@@ -236,17 +297,17 @@ def login_instagram(
     if not username or password is None:
         raise BrowserAuthError("Faltan credenciales para login", username=username)
 
-    logger.info("[auth] Iniciando login interactivo para %s", username)
+    log.info("auth_login_interactive_start", username=username)
     success = False
 
     try:
         driver.get(login_url)
-        logger.debug("[auth] GET %s", login_url)
+        log.debug("auth_nav_login_url", url=login_url)
         _hsleep(1.0, 2.0)
         _accept_cookies_banner(driver)
 
         user_input, pass_input = _locate_inputs(driver, wait_s)
-        logger.debug("[auth] Inputs localizados (username/password)")
+        log.debug("auth_login_inputs_located")
         user_input.clear(); pass_input.clear()
         _paste_text(user_input, username)
         _hsleep(0.15, 0.3)
@@ -255,11 +316,11 @@ def login_instagram(
 
         submit_attempts = 3
         for attempt in range(1, submit_attempts + 1):
-            logger.debug("[auth] Submit try %d/%d (plan A)", attempt, submit_attempts)
+            log.debug("auth_submit_try", attempt=attempt, max_attempts=submit_attempts, plan="A")
             try:
                 _click_submit_strict(driver, wait_s=8)
             except Exception as e:
-                logger.debug("[auth] Plan A click submit falló, probando fallbacks (detalle suprimido)")
+                log.debug("auth_submit_plan_a_failed_fallback", error=str(e))
                 _click_submit_fallbacks(driver, pass_input, login_url)
 
             _hsleep(0.6, 1.0)
@@ -277,7 +338,7 @@ def login_instagram(
             banner = _extract_error_banner(driver)
             if banner and "formulario de login" not in banner:
                 msg = _clean_text(f"Login falló: {banner}")
-                logger.warning("[auth] %s (usuario=%s)", msg, username)
+                log.warning("auth_login_failed_banner", username=username, message=msg)
                 raise BrowserAuthError(msg, username=username)
 
             if not _on_login_page(driver):
@@ -285,7 +346,7 @@ def login_instagram(
 
         if _on_login_page(driver):
             msg = "Login falló: permaneció en pantalla de login"
-            logger.warning("[auth] %s (usuario=%s)", msg, username)
+            log.warning("auth_login_stuck_on_login_page", username=username, message=msg)
             raise BrowserAuthError(msg, username=username)
 
         try:
@@ -293,7 +354,7 @@ def login_instagram(
                 EC.presence_of_element_located((By.XPATH, "//input[@name='verificationCode' or @name='otpCode']"))
             )
             if challenge is not None:
-                logger.info("[auth] Se requiere 2FA para %s", username)
+                log.info("auth_two_factor_required", username=username)
                 if two_factor_code_provider is None:
                     raise BrowserAuthError("Se requiere 2FA y no hay proveedor de código", username=username)
                 code = (two_factor_code_provider() or "").strip()
@@ -309,24 +370,24 @@ def login_instagram(
                 ).click()
                 _hsleep(1.0, 1.5)
         except TimeoutException:
-            logger.debug("[auth] No se detectó flujo de 2FA (ok)")
+            log.debug("auth_two_factor_not_detected")
 
         _handle_save_login_info_popup(driver)
         driver.get(base_url)
-        logger.debug("[auth] GET %s para verificación de sesión", base_url)
+        log.debug("auth_nav_base_url_for_verification", url=base_url)
 
         if not _is_logged_in(driver, timeout=wait_s):
             msg = "No se pudo verificar sesión tras login"
-            logger.error("[auth] %s (usuario=%s)", msg, username)
+            log.error("auth_login_verification_failed", username=username, message=msg)
             raise BrowserAuthError(msg, username=username)
 
         save_cookies(driver, username)
         success = True
-        logger.info("[auth] Login exitoso y cookies guardadas para %s", username)
+        log.info("auth_login_success", username=username)
 
     except (TimeoutException, NoSuchElementException) as e:
         msg = f"Falló UI de login: {e.__class__.__name__}"
-        logger.error("[auth] %s (usuario=%s)", msg, username)
+        log.error("auth_login_ui_failed", username=username, message=msg, error_type=e.__class__.__name__)
         raise BrowserAuthError(msg, username=username) from e
 
     except BrowserAuthError:
@@ -334,13 +395,13 @@ def login_instagram(
 
     except Exception as e:
         msg = _clean_text(f"Error inesperado durante login: {e}")
-        logger.exception("[auth] %s (usuario=%s)", msg, username)
+        log.error("auth_login_unexpected_error", username=username, message=msg, error=str(e))
         raise BrowserAuthError(msg, username=username) from e
 
     finally:
         if not success:
             try:
                 clear_cookies_file(username)
-                logger.debug("[auth] Cookies previas eliminadas tras fallo de login (%s)", username)
+                log.debug("auth_cookies_cleared_after_login_failure", username=username)
             except Exception:
-                logger.debug("[auth] No se pudo eliminar cookies previas (%s)", username, exc_info=True)
+                log.debug("auth_cookies_clear_failed_after_login_failure", username=username)

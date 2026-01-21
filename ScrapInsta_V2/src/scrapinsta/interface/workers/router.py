@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-import logging
 import heapq
 import itertools
 import random
@@ -12,6 +11,7 @@ from collections import defaultdict, deque
 
 from scrapinsta.application.dto.tasks import TaskEnvelope, ResultEnvelope
 from scrapinsta.domain.ports.job_store import JobStorePort
+from scrapinsta.crosscutting.logging_config import get_logger
 from scrapinsta.crosscutting.metrics import tasks_queued, jobs_active
 
 # =========================
@@ -190,6 +190,7 @@ class Router:
 
         self._lock = threading.Lock()
         self._stopping = False
+        self._log = get_logger("router")
 
     # ----------------
     #   API PÚBLICA
@@ -198,36 +199,17 @@ class Router:
     def add_job(self, job: Job) -> None:
         """
         Registra un nuevo Job. Podés llamar esto desde el hilo principal.
-        Persiste el Job si hay JobStore.
+
+        Importante (arquitectura):
+        - La API crea jobs en DB.
+        - Dispatcher/Router crean y gestionan tasks.
+        Por eso Router NO debe re-crear ni marcar jobs en DB (evita duplicaciones).
         """
         with self._lock:
             if job.job_id in self._jobs:
                 raise ValueError(f"Job duplicado: {job.job_id}")
             self._jobs[job.job_id] = job
             heapq.heappush(self._job_heap, _PrioritizedJobRef(priority=job.priority, created_at=job.created_at, job_id=job.job_id))
-
-            if self._job_store:
-                try:
-                    client_id = self._job_store.get_job_client_id(job.job_id)
-                    if not client_id:
-                        logging.getLogger("router").error(
-                            "job_missing_client_id",
-                            job_id=job.job_id,
-                            message="Job no tiene client_id asignado. Esto no debería ocurrir."
-                        )
-                        raise ValueError(f"Job {job.job_id} no tiene client_id asignado. Esto indica un error de datos.")
-                    self._job_store.create_job(
-                        job_id=job.job_id,
-                        kind=job.kind,
-                        priority=job.priority,
-                        batch_size=job.batch_size,
-                        extra=job.extra,
-                        total_items=len(job.items),
-                        client_id=client_id,
-                    )
-                    self._job_store.mark_job_running(job.job_id)
-                except Exception:
-                    pass
 
     def dispatch_tick(self) -> None:
         """
@@ -276,6 +258,9 @@ class Router:
             if not task_id:
                 return
 
+            res_payload = res.result if isinstance(getattr(res, "result", None), dict) else {}
+            retryable = bool(res_payload.get("retryable")) if isinstance(res_payload, dict) else False
+
             meta = self._task_meta.pop(task_id, None)
             if meta:
                 acc = meta["account"]
@@ -289,6 +274,9 @@ class Router:
 
                 if ok:
                     self._mark_account_ok(acc)
+                elif retryable:
+                    # No penalizamos con backoff una caída de driver/pestaña: queremos reintentar rápido.
+                    pass
                 else:
                     self._mark_account_error(acc)
 
@@ -297,16 +285,64 @@ class Router:
                     job = self._jobs[job_id]
                     if ok:
                         job.completed += 1
-                    else:
+                    elif not retryable:
                         job.errors += 1
 
             if self._job_store:
                 try:
                     corr = getattr(res, "correlation_id", None)
                     if ok:
-                        self._job_store.mark_task_ok(corr, task_id, res.result if isinstance(res.result, dict) else None)
+                        self._job_store.mark_task_ok(corr, task_id, res_payload if isinstance(res_payload, dict) else None)
                     else:
-                        self._job_store.mark_task_error(corr, task_id, res.error or "error")
+                        # Retryable => reencolar con cap (evita loop infinito)
+                        if retryable and hasattr(self._job_store, "requeue_task_with_attempts_cap"):
+                            max_attempts = int(res_payload.get("max_attempts", 3)) if isinstance(res_payload, dict) else 3
+                            requeued = bool(
+                                self._job_store.requeue_task_with_attempts_cap(
+                                    corr,
+                                    task_id,
+                                    max_attempts=max_attempts,
+                                    final_error_msg=(res.error or "retry exhausted"),
+                                )
+                            )
+                            if requeued and meta:
+                                self._log.info(
+                                    "task_requeued_retryable",
+                                    job_id=corr,
+                                    task_id=task_id,
+                                    account=meta.get("account"),
+                                    kind=(self._jobs.get(meta.get("job_id")).kind if meta.get("job_id") in self._jobs else None),
+                                    username=meta.get("username"),
+                                    max_attempts=max_attempts,
+                                    reason=res_payload.get("retry_reason") if isinstance(res_payload, dict) else None,
+                                )
+                                job_id = meta.get("job_id")
+                                username = meta.get("username")
+                                if job_id and username and job_id in self._jobs:
+                                    job = self._jobs[job_id]
+                                    job.pending.add(username)
+                                    # Importante: si el job se quedó sin pending antes, _refresh_heap lo saca del heap.
+                                    # Al reencolar, debemos reinsertarlo para que vuelva a despacharse.
+                                    heapq.heappush(
+                                        self._job_heap,
+                                        _PrioritizedJobRef(priority=job.priority, created_at=job.created_at, job_id=job.job_id),
+                                    )
+                            elif (not requeued) and meta:
+                                # retryable pero agotó el cap => cuenta como error definitivo para los contadores in-memory
+                                job_id = meta.get("job_id")
+                                if job_id and job_id in self._jobs:
+                                    self._jobs[job_id].errors += 1
+                                self._log.warning(
+                                    "task_retry_exhausted",
+                                    job_id=corr,
+                                    task_id=task_id,
+                                    account=meta.get("account"),
+                                    username=meta.get("username"),
+                                    max_attempts=max_attempts,
+                                    error=res.error,
+                                )
+                        else:
+                            self._job_store.mark_task_error(corr, task_id, res.error or "error")
 
                     if corr and self._job_store.all_tasks_finished(corr):
                         self._job_store.mark_job_done(corr)
@@ -511,11 +547,7 @@ class Router:
                     try:
                         client_id = self._job_store.get_job_client_id(job.job_id)
                         if not client_id:
-                            logging.getLogger("router").error(
-                                "job_missing_client_id",
-                                job_id=job.job_id,
-                                message="Job no tiene client_id asignado. Esto no debería ocurrir."
-                            )
+                            self._log.error("job_missing_client_id", job_id=job.job_id)
                             raise ValueError(f"Job {job.job_id} no tiene client_id asignado. Esto indica un error de datos.")
                         self._job_store.add_task(
                             job_id=job.job_id,
@@ -526,7 +558,7 @@ class Router:
                             payload=payload if isinstance(payload, dict) else None,
                             client_id=client_id,
                         )
-                        logging.getLogger("router").info("task queued: %s (account=%s)", task_id, client_acc)
+                        self._log.info("task_queued", task_id=task_id, account=client_acc, job_id=job.job_id, kind=job.kind)
                     except Exception:
                         pass
 
@@ -558,35 +590,28 @@ class Router:
 
             if self._job_store:
                 try:
-                    client_id = self._job_store.get_job_client_id(job.job_id)
-                    if not client_id:
-                        logging.getLogger("router").error(
-                            "job_missing_client_id",
-                            job_id=job.job_id,
-                            message="Job no tiene client_id asignado. Esto no debería ocurrir."
-                        )
-                        raise ValueError(f"Job {job.job_id} no tiene client_id asignado. Esto indica un error de datos.")
-                    self._job_store.add_task(
-                        job_id=job.job_id,
-                        task_id=task_id,
-                        correlation_id=job.job_id,
-                        account_id=acc,
-                        username=username,
-                        payload=payload if isinstance(payload, dict) else None,
-                        client_id=client_id,
-                    )
-                    logging.getLogger("router").info("task queued: %s (account=%s)", task_id, acc)
+                    # Claim atómico antes de enviar a cola.
+                    # Si ya fue reclamada por otro dispatcher, NO enviamos duplicado.
+                    if not self._job_store.claim_task(job.job_id, task_id, acc):
+                        job.pending.discard(username)
+                        continue
                 except Exception:
-                    pass
+                    # Si falla el claim por cualquier razón, evitamos enviar duplicado.
+                    job.pending.discard(username)
+                    continue
 
-            self._send_map[acc](env)
-            logging.getLogger("router").info("task sent: %s -> %s", task_id, acc)
-
-            if self._job_store:
-                try:
-                    self._job_store.mark_task_sent(job.job_id, task_id)
-                except Exception:
-                    pass
+            try:
+                self._send_map[acc](env)
+                self._log.info("task_sent", task_id=task_id, account=acc, job_id=job.job_id, kind=job.kind)
+            except Exception:
+                # Revertimos el claim para que vuelva a entrar al ciclo.
+                if self._job_store:
+                    try:
+                        self._job_store.release_task(job.job_id, task_id, error=None)
+                    except Exception:
+                        pass
+                job.pending.discard(username)
+                continue
 
             self._task_meta[task_id] = {
                 "account": acc,

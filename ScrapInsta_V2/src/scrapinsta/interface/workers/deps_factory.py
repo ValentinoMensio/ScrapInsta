@@ -1,8 +1,10 @@
 from __future__ import annotations
-import logging
 from typing import Optional, Dict
 
 from scrapinsta.config.settings import Settings
+from scrapinsta.crosscutting.logging_config import get_logger
+
+from selenium.common.exceptions import WebDriverException, InvalidSessionIdException
 
 from scrapinsta.domain.ports.browser_port import BrowserPort
 from scrapinsta.domain.ports.profile_repo import ProfileRepository
@@ -23,12 +25,25 @@ from scrapinsta.infrastructure.ai.chatgpt_openai import OpenAIMessageComposer
 from scrapinsta.infrastructure.db.connection_provider import make_mysql_conn_factory
 from scrapinsta.crosscutting.rate_limit import SlidingWindowRateLimiter, RateLimitConfig
 from scrapinsta.infrastructure.redis import RedisClient, CacheService
+from scrapinsta.application.services.text_analysis import detect_rubro as keyword_detect_rubro
 
 from scrapinsta.application.use_cases.analyze_profile import AnalyzeProfileUseCase
 from scrapinsta.application.use_cases.fetch_followings import FetchFollowingsUseCase
 from scrapinsta.application.use_cases.send_message import SendMessageUseCase
 
-logger = logging.getLogger(__name__)
+log = get_logger("deps_factory")
+
+def _driver_is_alive(driver) -> bool:
+    if driver is None:
+        return False
+    try:
+        # Cualquier comando simple sirve para detectar invalid session / DevTools disconnect.
+        _ = driver.current_url
+        return True
+    except (InvalidSessionIdException, WebDriverException):
+        return False
+    except Exception:
+        return False
 
 
 class UseCaseFactory:
@@ -67,6 +82,16 @@ class FactoryImpl(UseCaseFactory):
 
     @property
     def browser(self) -> BrowserPort:
+        # Si el driver se cayó (invalid session id / not connected to DevTools),
+        # recreamos todo para no quedar en estado "muerto" hasta reiniciar el proceso.
+        if self._browser is not None and self._driver_manager is not None:
+            try:
+                if not _driver_is_alive(self._driver_manager.driver):
+                    log.warning("driver_dead_recreating", account=self._account)
+                    self.close()
+            except Exception:
+                pass
+
         if self._browser is None:
             dm = self._ensure_driver()
             driver = dm.initialize_driver()
@@ -80,7 +105,7 @@ class FactoryImpl(UseCaseFactory):
                         require_sessionid=False,
                     )
                 except Exception:
-                    logger.debug("[%s] No se pudieron cargar cookies persistidas", self._account)
+                    log.debug("cookies_load_failed", account=self._account)
 
                 if not has_active_session_in_driver(driver, base_url="https://www.instagram.com/"):
                     session = SessionService(
@@ -95,6 +120,7 @@ class FactoryImpl(UseCaseFactory):
                 driver=driver,
                 base_url="https://www.instagram.com",
                 account_username=self._account,
+                rubro_detector=keyword_detect_rubro,
             )
         return self._browser
 
@@ -114,6 +140,14 @@ class FactoryImpl(UseCaseFactory):
 
     @property
     def sender(self) -> MessageSenderPort:
+        if self._sender is not None and self._driver_manager is not None:
+            try:
+                if not _driver_is_alive(self._driver_manager.driver):
+                    log.warning("driver_dead_recreating_for_sender", account=self._account)
+                    self.close()
+            except Exception:
+                pass
+
         if self._sender is None:
             dm = self._ensure_driver()
             driver = dm.initialize_driver()
@@ -162,11 +196,15 @@ class FactoryImpl(UseCaseFactory):
         )
 
     def close(self) -> None:
+        # Importante: el BrowserPort/Sender guardan una referencia al driver.
+        # Si el driver muere y recreamos, debemos reconstruir estos adapters.
+        self._browser = None
+        self._sender = None
         if self._driver_manager:
             try:
                 self._driver_manager.cleanup()
             except Exception:
-                logger.warning("[%s] Error cerrando driver", self._account, exc_info=True)
+                log.warning("driver_cleanup_failed", account=self._account)
             self._driver_manager = None
 
 

@@ -164,12 +164,10 @@ class TestCompleteFetchFlow:
         assert create_job_call["kind"] == "fetch_followings"
         assert create_job_call["extra"]["limit"] == 10
         assert create_job_call["extra"]["client_account"] == "test-account"
+        assert create_job_call["extra"]["target_username"] == "testuser"
         
-        mock_job_store.add_task.assert_called_once()
-        add_task_call = mock_job_store.add_task.call_args[1]
-        assert add_task_call["username"] == "testuser"
-        assert add_task_call["payload"]["username"] == "testuser"
-        assert add_task_call["payload"]["client_account"] == "test-account"
+        # Arquitectura: la API no crea tasks; el dispatcher/router lo hace.
+        mock_job_store.add_task.assert_not_called()
         
         mock_job_store.job_summary.return_value = {
             "queued": 0,
@@ -279,9 +277,8 @@ class TestCompleteAnalyzeFlow:
         assert create_job_call["priority"] == 5
         assert create_job_call["batch_size"] == 25
         assert create_job_call["total_items"] == 3
-        assert create_job_call["extra"] == {}
-        
-        assert mock_job_store.add_task.call_count == 3
+        assert create_job_call["extra"]["usernames"] == ["user1", "user2", "user3"]
+        mock_job_store.add_task.assert_not_called()
         
         mock_job_store.job_summary.return_value = {
             "queued": 1,

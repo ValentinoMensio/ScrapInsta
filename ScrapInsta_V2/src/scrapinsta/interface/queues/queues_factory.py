@@ -1,13 +1,13 @@
 from __future__ import annotations
-import logging
 from typing import Dict, List, Tuple
 
 from scrapinsta.config.settings import Settings
+from scrapinsta.crosscutting.logging_config import get_logger
 from .ports import TaskQueuePort, ResultQueuePort
 from .local_mp import LocalTaskQueue, LocalResultQueue
 from .sqs import SqsTaskQueue, SqsResultQueue
 
-logger = logging.getLogger(__name__)
+log = get_logger("queues_factory")
 
 
 def build_queues(
@@ -28,7 +28,7 @@ def build_queues(
     backend = (getattr(settings, "queues_backend", "local") or "local").strip().lower()
 
     if backend not in {"local", "sqs"}:
-        logger.warning("[queues_factory] backend desconocido '%s' -> usando 'local'", backend)
+        log.warning("queues_backend_unknown_fallback_local", backend=backend)
         backend = "local"
 
     # ------------------------
@@ -41,7 +41,7 @@ def build_queues(
         for acc in accounts:
             tqs[acc] = LocalTaskQueue(maxsize=maxsize)
             rqs[acc] = LocalResultQueue(maxsize=maxsize)
-        logger.info("[queues_factory] usando backend LOCAL (multiprocessing.Queue)")
+        log.info("queues_backend_selected", backend="local", account_count=len(accounts), maxsize=maxsize)
         return tqs, rqs, "local"
 
     # ------------------------
@@ -61,11 +61,11 @@ def build_queues(
         tqs = {acc: shared_tq for acc in accounts}
         rqs = {acc: shared_rq for acc in accounts}
 
-        logger.info("[queues_factory] usando backend SQS | región=%s", region)
+        log.info("queues_backend_selected", backend="sqs", account_count=len(accounts), region=region)
         return tqs, rqs, "sqs"
 
     except Exception as e:
-        logger.error("[queues_factory] error inicializando SQS: %s -> fallback a LOCAL", e, exc_info=True)
+        log.error("queues_sqs_init_failed_fallback_local", error=str(e))
         maxsize = getattr(settings, "queue_maxsize", 200)
         tqs: Dict[str, TaskQueuePort] = {}
         rqs: Dict[str, ResultQueuePort] = {}

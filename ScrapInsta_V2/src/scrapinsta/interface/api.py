@@ -840,26 +840,19 @@ def enqueue_followings(
             kind="fetch_followings",
             priority=5,
             batch_size=1,
-            extra={"limit": body.limit, "source": "ext", "client_account": client_account},
+            # Arquitectura: la API crea el Job; las Tasks las crea el dispatcher/router.
+            # Guardamos el seed y config en extra_json para que el dispatcher pueda reconstruir el flujo.
+            extra={
+                "limit": body.limit,
+                "source": "ext",
+                "client_account": client_account,
+                "target_username": target,
+            },
             total_items=1,
             client_id=client_id,
         )
     except Exception as e:
         raise InternalServerError(f"create_job failed: {e}", error_code="DATABASE_ERROR", cause=e)
-
-    try:
-        seed_task_id = f"{job_id}:fetch_followings:{target}"
-        _job_store.add_task(
-            job_id=job_id,
-            task_id=seed_task_id,
-            correlation_id=job_id,
-            account_id=None,
-            username=target,
-            payload={"username": target, "limit": body.limit, "client_account": client_account},
-            client_id=client_id,
-        )
-    except Exception as e:
-        raise InternalServerError(f"add_task failed: {e}", error_code="DATABASE_ERROR", cause=e)
 
     return EnqueueResponse(job_id=job_id)
 
@@ -940,26 +933,13 @@ def enqueue_analyze_profile(
             kind="analyze_profile",
             priority=body.priority,
             batch_size=body.batch_size,
-            extra=body.extra or {},
+            # Arquitectura: API crea el Job; dispatcher/router crean las Tasks.
+            # Guardamos los items en extra_json para reconstrucción idempotente tras reinicios.
+            extra={**(body.extra or {}), "usernames": usernames},
             total_items=len(usernames),
             client_id=client_id,
         )
     except Exception as e:
         raise InternalServerError(f"create_job failed: {e}", error_code="DATABASE_ERROR", cause=e)
-
-    for u in usernames:
-        try:
-            task_id = f"{job_id}:analyze_profile:{u}"
-            _job_store.add_task(
-                job_id=job_id,
-                task_id=task_id,
-                correlation_id=job_id,
-                account_id=None,
-                username=u,
-                payload={"username": u, **(body.extra or {})},
-                client_id=client_id,
-            )
-        except Exception:
-            pass
 
     return EnqueueAnalyzeResponse(job_id=job_id, total_items=len(usernames))

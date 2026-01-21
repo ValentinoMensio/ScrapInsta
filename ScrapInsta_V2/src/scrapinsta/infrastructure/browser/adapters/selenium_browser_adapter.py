@@ -136,6 +136,19 @@ class SeleniumBrowserAdapter(BrowserPort):
         try:
             self._open_profile(username)
             self._sleep_human()
+
+            # Caso esperado: perfil privado (y la cuenta no lo sigue) => Instagram no permite abrir "siguiendo".
+            # En vez de fallar por timeout del modal, devolvemos lista vacía (resultado válido).
+            try:
+                if profile_page.is_profile_private(self.driver):
+                    logger.info("fetch_followings_skipped_private_profile owner=%s", username)
+                    duration = time.time() - start
+                    browser_action_duration_seconds.labels(action="get_followings", account=account).observe(duration)
+                    return []
+            except Exception:
+                # best-effort: si no podemos determinarlo, seguimos con el flujo normal
+                pass
+
             self._open_following_modal()
 
             unique: List[str] = []
@@ -150,6 +163,17 @@ class SeleniumBrowserAdapter(BrowserPort):
                 try:
                     batch = self._read_visible_usernames()
                 except RetryError as e:
+                    # Importante: no ocultar la causa real. Si el retry se agotó por caída del driver
+                    # (invalid session / devtools disconnected), propagamos el mensaje para que el
+                    # worker lo marque como retryable y el router reencole.
+                    last = getattr(e, "last_error", None) or getattr(e, "__cause__", None)
+                    msg = (str(last) if last else "").lower()
+                    if (
+                        "invalid session id" in msg
+                        or "not connected to devtools" in msg
+                        or "session deleted as the browser has closed the connection" in msg
+                    ):
+                        raise BrowserDOMError(f"driver dead: {last}") from e
                     raise BrowserDOMError("usernames list stale") from e
                 except WebDriverException as e:
                     msg = (str(e) or "").lower()

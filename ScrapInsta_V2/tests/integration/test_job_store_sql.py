@@ -180,12 +180,51 @@ class TestJobStoreSQL:
         assert "UPDATE job_tasks" in sql_called
         assert "status='sent'" in sql_called
         assert "sent_at=NOW()" in sql_called
+        assert "leased_at=NOW()" in sql_called
         
         params = mock_cursor.execute.call_args[0][1]
         assert params[0] == "job123"
         assert params[1] == "task456"
         
         mock_pymysql_connection.commit.assert_called_once()
+
+    def test_claim_task(self, job_store, mock_pymysql_connection, mock_cursor):
+        """Claim atómico de task (queued -> sent) evita duplicados."""
+        mock_cursor.rowcount = 1
+        
+        ok = job_store.claim_task("job123", "task456", "account1")
+        
+        assert ok is True
+        sql_called = mock_cursor.execute.call_args[0][0]
+        assert "UPDATE job_tasks" in sql_called
+        assert "INNER JOIN jobs" in sql_called
+        assert "status='sent'" in sql_called
+        assert "sent_at=NOW()" in sql_called
+        assert "status='queued'" in sql_called
+        
+        params = mock_cursor.execute.call_args[0][1]
+        assert params[0] == "account1"
+        assert params[1] == "job123"
+        assert params[2] == "task456"
+
+    def test_begin_task(self, job_store, mock_pymysql_connection, mock_cursor):
+        """begin_task setea leased_by una sola vez (idempotencia consumer)."""
+        mock_cursor.rowcount = 1
+        
+        ok = job_store.begin_task("job123", "task456", "account1", leased_by="worker:acc1")
+        assert ok is True
+        
+        sql_called = mock_cursor.execute.call_args[0][0]
+        assert "UPDATE job_tasks" in sql_called
+        assert "INNER JOIN jobs" in sql_called
+        assert "leased_by IS NULL" in sql_called
+        assert "status='sent'" in sql_called
+        
+        params = mock_cursor.execute.call_args[0][1]
+        assert params[0] == "worker:acc1"
+        assert params[1] == "job123"
+        assert params[2] == "task456"
+        assert params[3] == "account1"
     
     def test_mark_task_ok(self, job_store, mock_pymysql_connection, mock_cursor):
         """Marcar tarea como ok."""

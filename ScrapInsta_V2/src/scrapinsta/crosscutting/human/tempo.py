@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import logging
 import math
 import random
 import time
 from dataclasses import dataclass
 
-log = logging.getLogger(__name__)
+from scrapinsta.crosscutting.logging_config import get_logger
+
+log = get_logger("human_tempo")
 
 
 @dataclass
@@ -64,7 +65,7 @@ class HumanScheduler:
         # Pausas largas periódicas
         if self.cfg.long_pause_every > 0 and (self._actions % self.cfg.long_pause_every == 0):
             extra = self._rng.uniform(*self.cfg.long_pause_range)
-            log.debug("HumanScheduler: pausa larga de %.2fs tras %d acciones", extra, self._actions)
+            log.debug("human_pause_long", extra_s=round(extra, 2), actions=self._actions)
             delay += extra
 
         # Backoff humano explícito (si fue seteado por señales externas)
@@ -83,7 +84,7 @@ class HumanScheduler:
         """
         added = self._rng.uniform(min_extra, max_extra)
         self._human_backoff = min(120.0, self._human_backoff + added)
-        log.warning("HumanScheduler: record_block -> backoff humano ahora %.2fs (+=%.2fs)", self._human_backoff, added)
+        log.warning("human_backoff_increased", backoff_s=round(self._human_backoff, 2), added_s=round(added, 2))
 
     def record_success(self, *, decay: float = 0.5) -> None:
         """
@@ -95,7 +96,7 @@ class HumanScheduler:
             self._human_backoff *= decay
             if self._human_backoff < 2.0:
                 self._human_backoff = 0.0
-            log.debug("HumanScheduler: record_success -> backoff %.2fs -> %.2fs", before, self._human_backoff)
+            log.debug("human_backoff_decayed", before_s=round(before, 2), after_s=round(self._human_backoff, 2), decay=decay)
 
 
 def sleep_jitter(base: float, jitter: float = 0.35, mode: str = "uniform", *, max_factor: float = 3.0) -> None:

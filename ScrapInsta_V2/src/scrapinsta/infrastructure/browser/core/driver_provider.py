@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 import time
 from pathlib import Path
@@ -10,11 +9,12 @@ from selenium_stealth import stealth
 from seleniumwire.undetected_chromedriver.v2 import Chrome as ChromeWire
 
 from scrapinsta.config.settings import Settings
+from scrapinsta.crosscutting.logging_config import get_logger
 
 from .browser_utils import detect_chrome_major, quick_probe, safe_quit, safe_username
 from .driver_factory import build_chrome_options
 
-logger = logging.getLogger(__name__)
+log = get_logger("driver_provider")
 
 
 class DriverManagerError(RuntimeError):
@@ -107,7 +107,7 @@ class DriverProvider:
                 }
                 if self.chrome_version_main:
                     driver_args["version_main"] = int(self.chrome_version_main)
-                    logger.info("[DriverProvider] version_main=%s", self.chrome_version_main)
+                    log.info("driver_version_main", version_main=int(self.chrome_version_main))
 
                 driver = ChromeWire(**driver_args)
 
@@ -128,20 +128,23 @@ class DriverProvider:
                         fix_hairline=True,
                     )
                 except Exception:
-                    logger.debug("No se pudo aplicar selenium_stealth", exc_info=True)
+                    log.debug("selenium_stealth_apply_failed", account=self.username)
 
                 # Warm-up opcional (best-effort)
                 quick_probe(driver)
 
                 self.driver = driver
-                logger.info("[%s] Driver inicializado OK (UC local)", self.username)
+                log.info("driver_initialized", account=self.username, mode="uc_local")
                 return self.driver
 
             except Exception as e:
                 last_error = e
-                logger.exception(
-                    "[%s] Error inicializando driver (attempt %d/%d): %s",
-                    self.username, attempt, self.retry_attempts, e,
+                log.error(
+                    "driver_init_failed",
+                    account=self.username,
+                    attempt=attempt,
+                    max_attempts=self.retry_attempts,
+                    error=str(e),
                 )
                 safe_quit(self.driver)
                 self.driver = None

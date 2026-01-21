@@ -135,12 +135,10 @@ class TestEnqueueFollowings:
         assert call_kwargs["kind"] == "fetch_followings"
         assert call_kwargs["extra"]["limit"] == 10
         assert call_kwargs["extra"]["client_account"] == "test-account"
+        assert call_kwargs["extra"]["target_username"] == "testuser"
         
-        mock_job_store.add_task.assert_called_once()
-        task_call = mock_job_store.add_task.call_args[1]
-        assert task_call["username"] == "testuser"
-        assert task_call["payload"]["username"] == "testuser"
-        assert task_call["payload"]["limit"] == 10
+        # Arquitectura: la API NO crea tasks. Las crea el dispatcher/router.
+        mock_job_store.add_task.assert_not_called()
     
     def test_enqueue_followings_without_auth(
         self, api_client: TestClient, auth_headers: Dict[str, str]
@@ -235,9 +233,8 @@ class TestEnqueueFollowings:
         )
         
         assert response.status_code == 200
-        task_call = mock_job_store.add_task.call_args[1]
-        assert task_call["username"] == "testuser"
-        assert task_call["payload"]["username"] == "testuser"
+        call_kwargs = mock_job_store.create_job.call_args[1]
+        assert call_kwargs["extra"]["target_username"] == "testuser"
     
     def test_enqueue_followings_bearer_auth(
         self, api_client: TestClient, mock_job_store: Mock, auth_headers_bearer: Dict[str, str], monkeypatch: pytest.MonkeyPatch
@@ -298,8 +295,8 @@ class TestEnqueueAnalyze:
         assert call_kwargs["priority"] == 5
         assert call_kwargs["batch_size"] == 25
         assert call_kwargs["total_items"] == 3
-        
-        assert mock_job_store.add_task.call_count == 3
+        assert call_kwargs["extra"]["usernames"] == ["user1", "user2", "user3"]
+        mock_job_store.add_task.assert_not_called()
     
     def test_enqueue_analyze_empty_usernames(
         self, api_client: TestClient, auth_headers: Dict[str, str]
@@ -367,11 +364,10 @@ class TestEnqueueAnalyze:
         )
         
         assert response.status_code == 200
-        calls = mock_job_store.add_task.call_args_list
-        assert len(calls) == 3
-        assert calls[0][1]["username"] == "user1"
-        assert calls[1][1]["username"] == "user2"
-        assert calls[2][1]["username"] == "user3"
+        call_kwargs = mock_job_store.create_job.call_args[1]
+        assert call_kwargs["extra"]["usernames"] == ["user1", "user2", "user3"]
+        # Arquitectura: la API no crea tasks; el dispatcher/router lo hace.
+        mock_job_store.add_task.assert_not_called()
 
 
 # =========================================================

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import logging
 import time
-from typing import Optional, Iterable
+from typing import Optional, Iterable, Any
 
 # DTOs de transporte
 from scrapinsta.application.dto.followings import (
@@ -30,6 +29,8 @@ from scrapinsta.domain.ports.followings_repo import (
     FollowingsValidationError,
 )
 
+from scrapinsta.crosscutting.logging_config import get_logger
+
 
 class FetchFollowingsUseCase:
     """
@@ -47,18 +48,18 @@ class FetchFollowingsUseCase:
         self,
         browser: BrowserPort,
         repo: FollowingsRepo,
-        logger: Optional[logging.Logger] = None,
+        logger: Optional[Any] = None,
     ) -> None:
         self._browser = browser
         self._repo = repo
-        self._log = logger or logging.getLogger(__name__)
+        self._log = logger or get_logger("fetch_followings")
 
     def __call__(self, req: FetchFollowingsRequest) -> FetchFollowingsResponse:
         owner = Username(value=req.username)
         limit = req.max_followings
 
         if limit is not None and limit <= 0:
-            self._log.info("Límite inválido, retornando lista vacía", extra={"owner": owner.value, "limit": limit})
+            self._log.info("fetch_followings_invalid_limit", owner=owner.value, limit=limit)
             return FetchFollowingsResponse(owner=owner.value, followings=[], new_saved=0)
 
         try:
@@ -67,27 +68,29 @@ class FetchFollowingsUseCase:
             scraping_duration = time.time() - start_time
 
             if not isinstance(targets, list):
-                self._log.warning("BrowserPort no retornó lista válida", extra={"owner": owner.value, "type": type(targets)})
+                self._log.warning("fetch_followings_invalid_browser_return", owner=owner.value, got_type=type(targets).__name__)
                 return FetchFollowingsResponse(owner=owner.value, followings=[], new_saved=0)
 
             for t in targets:
                 if not isinstance(t, Username):
-                    self._log.error("BrowserPort retornó tipo inválido en targets", extra={
-                        "owner": owner.value,
-                        "expected": "Username",
-                        "got": type(t).__name__
-                    })
+                    self._log.error(
+                        "fetch_followings_invalid_target_type",
+                        owner=owner.value,
+                        expected="Username",
+                        got=type(t).__name__,
+                    )
                     return FetchFollowingsResponse(owner=owner.value, followings=[], new_saved=0)
 
             if not targets:
-                self._log.info("No se obtuvieron followings", extra={"owner": owner.value})
+                self._log.info("fetch_followings_empty", owner=owner.value)
                 return FetchFollowingsResponse(owner=owner.value, followings=[], new_saved=0)
 
-            self._log.info("Scraping completado", extra={
-                "owner": owner.value,
-                "count": len(targets),
-                "duration_sec": round(scraping_duration, 2)
-            })
+            self._log.info(
+                "fetch_followings_scrape_done",
+                owner=owner.value,
+                count=len(targets),
+                duration_s=round(scraping_duration, 2),
+            )
 
             rels = []
             seen = set()
@@ -101,14 +104,7 @@ class FetchFollowingsUseCase:
 
             inserted = self._repo.save_for_owner(owner, rels)
 
-            self._log.info(
-                "FetchFollowings completado",
-                extra={
-                    "owner": owner.value,
-                    "fetched": len(rels),
-                    "inserted_new": inserted,
-                },
-            )
+            self._log.info("fetch_followings_done", owner=owner.value, fetched=len(rels), inserted_new=inserted)
 
             source = getattr(self._browser, "source", "selenium")
             
@@ -119,16 +115,16 @@ class FetchFollowingsUseCase:
                 source=source,
             )
 
-        except (BrowserNavigationError, BrowserDOMError, BrowserRateLimitError):
-            self._log.exception("Error de scraping", extra={"owner": owner.value, "limit": limit})
+        except (BrowserNavigationError, BrowserDOMError, BrowserRateLimitError) as e:
+            self._log.error("fetch_followings_scrape_error", owner=owner.value, limit=limit, error=str(e))
             raise
 
-        except (FollowingsValidationError, FollowingsPersistenceError):
-            self._log.exception("Error de persistencia", extra={"owner": owner.value})
+        except (FollowingsValidationError, FollowingsPersistenceError) as e:
+            self._log.error("fetch_followings_persistence_error", owner=owner.value, error=str(e))
             raise
 
-        except BrowserPortError:
-            self._log.exception("Error inesperado del navegador", extra={"owner": owner.value})
+        except BrowserPortError as e:
+            self._log.error("fetch_followings_browser_error", owner=owner.value, error=str(e))
             raise
 
     def run(self, username_origin: str, max_followings: int = 100) -> FetchFollowingsResponse:

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import logging
 import signal
 import time
 from typing import Callable, Optional
 
 from scrapinsta.application.dto.tasks import TaskEnvelope, ResultEnvelope
 from scrapinsta.application.services.task_dispatcher import TaskDispatcher
+from scrapinsta.crosscutting.logging_config import get_logger
 from scrapinsta.crosscutting.metrics import (
     tasks_processed_total,
     task_duration_seconds,
@@ -23,8 +23,18 @@ except Exception:
         def create_fetch_followings(self): ...
 
 from scrapinsta.config.settings import Settings
+from scrapinsta.infrastructure.db.job_store_sql import JobStoreSQL
 
-logger = logging.getLogger(__name__)
+log = get_logger("worker")
+
+def _is_retryable_browser_crash(err: str) -> bool:
+    s = (err or "").lower()
+    return (
+        "invalid session id" in s
+        or "not connected to devtools" in s
+        or "session deleted as the browser has closed the connection" in s
+        or "from disconnected" in s and "devtools" in s
+    )
 
 
 class InstagramWorker:
@@ -76,7 +86,7 @@ class InstagramWorker:
             pass
 
     def _on_stop_signal(self, *_: object) -> None:
-        logger.warning("[%s] stop signal received", self._name)
+        log.warning("worker_stop_signal", worker=self._name)
         self._running = False
 
     # ---------------------------
@@ -92,7 +102,7 @@ class InstagramWorker:
                     attempts=1,
                 ))
             except Exception:
-                logger.debug("[%s] heartbeat send failed", self._name, exc_info=True)
+                log.debug("worker_heartbeat_send_failed", worker=self._name)
             self._last_hb = now
 
     # ---------------------------
@@ -100,9 +110,13 @@ class InstagramWorker:
     # ---------------------------
     def run(self) -> None:
         settings = Settings()
-        logger.info(
-            "[%s] starting worker | selenium_url=%s poll=%.1fs hb=%.1fs",
-            self._name, getattr(settings, "selenium_url", None), self._poll, self._hb
+        job_store = JobStoreSQL(settings.db_dsn)
+        log.info(
+            "worker_starting",
+            worker=self._name,
+            selenium_url=getattr(settings, "selenium_url", None),
+            poll_s=self._poll,
+            heartbeat_s=self._hb,
         )
 
         self._install_signals()
@@ -111,14 +125,14 @@ class InstagramWorker:
 
         while self._running:
             if self._stop_event and self._stop_event():
-                logger.info("[%s] stop_event set -> exiting loop", self._name)
+                log.info("worker_stop_event", worker=self._name)
                 break
 
             pack = None
             try:
                 pack = self._receive(self._poll)
             except Exception as e:
-                logger.warning("[%s] receive() failed: %s", self._name, e, exc_info=True)
+                log.warning("worker_receive_failed", worker=self._name, error=str(e))
                 self._maybe_heartbeat()
                 continue
 
@@ -132,8 +146,8 @@ class InstagramWorker:
                 try:
                     ack() 
                 except Exception:
-                    logger.debug("[%s] ack failed on poison pill", self._name, exc_info=True)
-                logger.info("[%s] poison pill received -> exiting", self._name)
+                    log.debug("worker_ack_failed_poison_pill", worker=self._name)
+                log.info("worker_poison_pill", worker=self._name)
                 break
 
             task_kind = getattr(env, "task", "unknown")
@@ -141,7 +155,43 @@ class InstagramWorker:
             start_time = time.time()
 
             try:
+                # Cinturón y tirantes: idempotencia en consumer ante doble delivery (SQS/colas).
+                corr = getattr(env, "correlation_id", None)
+                task_id = getattr(env, "id", None)
+                if corr and task_id and isinstance(account, str) and account.strip():
+                    try:
+                        started = job_store.begin_task(
+                            job_id=str(corr),
+                            task_id=str(task_id),
+                            account_id=str(account),
+                            leased_by=self._name,
+                        )
+                        if not started:
+                            try:
+                                ack()
+                            except Exception:
+                                pass
+                            self._maybe_heartbeat()
+                            continue
+                    except Exception:
+                        # Si no podemos verificar, preferimos NO ejecutar para evitar side-effects duplicados.
+                        try:
+                            ack()
+                        except Exception:
+                            pass
+                        self._maybe_heartbeat()
+                        continue
+
                 result = self._dispatcher.dispatch(env)
+                # Retry controlado: si el browser se cae, marcamos como retryable para que el Router reencole con cap.
+                if (not result.ok) and _is_retryable_browser_crash(getattr(result, "error", "") or ""):
+                    try:
+                        payload = result.result if isinstance(result.result, dict) else {}
+                        payload = dict(payload)
+                        payload.update({"retryable": True, "retry_reason": "driver_dead"})
+                        result.result = payload
+                    except Exception:
+                        pass
                 duration = time.time() - start_time
                 
                 task_duration_seconds.labels(kind=task_kind, account=account).observe(duration)
@@ -152,18 +202,18 @@ class InstagramWorker:
                 try:
                     self._send(result)
                 except Exception as e:
-                    logger.error("[%s] send() failed: %s", self._name, e, exc_info=True)
+                    log.error("worker_send_failed", worker=self._name, error=str(e))
                     try:
                         nack()
                     except Exception:
-                        logger.debug("[%s] nack failed after send error", self._name, exc_info=True)
+                        log.debug("worker_nack_failed_after_send_error", worker=self._name)
                     self._maybe_heartbeat()
                     continue
 
                 try:
                     ack()
                 except Exception:
-                    logger.debug("[%s] ack failed", self._name, exc_info=True)
+                    log.debug("worker_ack_failed", worker=self._name)
 
             except Exception as e:
                 duration = time.time() - start_time
@@ -173,7 +223,7 @@ class InstagramWorker:
                 tasks_processed_total.labels(kind=task_kind, status="error", account=account).inc()
                 worker_errors_total.labels(account=account, error_type=error_type).inc()
                 
-                logger.exception("[%s] dispatch failed: %s", self._name, e)
+                log.error("worker_dispatch_failed", worker=self._name, error=str(e), error_type=error_type)
                 try:
                     self._send(ResultEnvelope(
                         ok=False,
@@ -183,13 +233,13 @@ class InstagramWorker:
                         correlation_id=getattr(env, "correlation_id", None),
                     ))
                 except Exception:
-                    logger.debug("[%s] send() of failure result also failed", self._name, exc_info=True)
+                    log.debug("worker_send_failure_result_failed", worker=self._name)
                 try:
                     nack()
                 except Exception:
-                    logger.debug("[%s] nack failed after dispatch error", self._name, exc_info=True)
+                    log.debug("worker_nack_failed_after_dispatch_error", worker=self._name)
 
             self._maybe_heartbeat()
 
-        logger.info("[%s] worker stopped", self._name)
+        log.info("worker_stopped", worker=self._name)
 

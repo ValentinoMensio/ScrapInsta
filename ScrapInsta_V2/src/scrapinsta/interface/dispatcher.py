@@ -90,25 +90,79 @@ def _load_job_meta(store: JobStoreSQL, job_id: str) -> Dict[str, Any]:
                 "extra": json.loads(row["extra_json"]) if row.get("extra_json") else None,
             }
 
-
-def _derive_items_for_fetch(store: JobStoreSQL, job_id: str) -> List[str]:
-    sql = """
-        SELECT username
-        FROM job_tasks
-        WHERE job_id=%s AND username IS NOT NULL
-        ORDER BY created_at ASC
-        LIMIT 1
+def _items_from_meta_for_job(job_id: str, meta: Dict[str, Any], *, store: JobStoreSQL) -> List[str]:
     """
-    with store._connect() as con:
-        with con.cursor() as cur:
-            cur.execute(sql, (job_id,))
-            row = cur.fetchone()
-            if not row or not row.get("username"):
-                raise RuntimeError(f"no se encontró username semilla para job {job_id}")
-            target = str(row["username"]).strip().lower()
-            if not target:
-                raise RuntimeError(f"username vacío en semilla de job {job_id}")
+    Determina los items (usernames) de un job a partir de extra_json.
+    Mantiene compatibilidad con jobs antiguos (que tenían seed task en job_tasks).
+    """
+    kind = str(meta.get("kind") or "").strip()
+    extra = meta.get("extra") or {}
+
+    if kind == "fetch_followings":
+        target = (extra.get("target_username") or "").strip().lower()
+        if target:
             return [target]
+        # Compatibilidad hacia atrás: seed task persistida
+        sql = """
+            SELECT username
+            FROM job_tasks
+            WHERE job_id=%s AND username IS NOT NULL
+            ORDER BY created_at ASC
+            LIMIT 1
+        """
+        with store._connect() as con:
+            with con.cursor() as cur:
+                cur.execute(sql, (job_id,))
+                row = cur.fetchone()
+                if row and row.get("username"):
+                    v = str(row["username"]).strip().lower()
+                    if v:
+                        return [v]
+        raise RuntimeError(f"no se encontró target_username para job {job_id}")
+
+    if kind == "analyze_profile":
+        raw = extra.get("usernames")
+        if isinstance(raw, list):
+            return [str(u).strip().lower() for u in raw if isinstance(u, str) and u.strip()]
+        return []
+
+    return []
+
+
+def _ensure_tasks_for_job(store: JobStoreSQL, job_id: str, kind: str, items: List[str], extra: Optional[dict]) -> None:
+    """
+    Asegura que existan tasks en DB para los items del job.
+    Idempotente: add_task hace upsert y NO pisa status si ya fue completada.
+    """
+    client_id = store.get_job_client_id(job_id)
+    if not client_id:
+        log.error("job_missing_client_id", job_id=job_id)
+        raise ValueError(f"Job {job_id} no tiene client_id asignado")
+
+    common: Dict[str, Any] = {}
+    if isinstance(extra, dict):
+        # Evitar payloads gigantes/duplicados por task (ej: lista completa de usernames)
+        for k, v in extra.items():
+            if k in {"usernames"}:
+                continue
+            common[k] = v
+
+    for u in items:
+        username = (u or "").strip().lower()
+        if not username:
+            continue
+        task_id = f"{job_id}:{kind}:{username}"
+        payload: Dict[str, Any] = {"username": username}
+        payload.update(common)
+        store.add_task(
+            job_id=job_id,
+            task_id=task_id,
+            correlation_id=job_id,
+            account_id=None,
+            username=username,
+            payload=payload,
+            client_id=client_id,
+        )
 
 
 class FetchToAnalyzeOrchestrator:
@@ -120,21 +174,13 @@ class FetchToAnalyzeOrchestrator:
         self._created_once: Set[str] = set()
 
     def _seed_owner(self, job_id: str) -> Optional[str]:
-        sql = """
-            SELECT username
-            FROM job_tasks
-            WHERE job_id=%s AND username IS NOT NULL
-            ORDER BY created_at ASC
-            LIMIT 1
-        """
-        with self._store._connect() as con:
-            with con.cursor() as cur:
-                cur.execute(sql, (job_id,))
-                row = cur.fetchone()
-                if row and row.get("username"):
-                    owner = (row["username"] or "").strip().lower()
-                    return owner or None
-        return None
+        try:
+            meta = _load_job_meta(self._store, job_id)
+            extra = meta.get("extra") or {}
+            owner = (extra.get("target_username") or "").strip().lower()
+            return owner or None
+        except Exception:
+            return None
 
     def _find_follow_cols(self) -> tuple[str, str]:
         return ("username_target", "username_origin")
@@ -177,9 +223,13 @@ class FetchToAnalyzeOrchestrator:
                     if v:
                         out.append(v)
 
-        logging.getLogger("dispatcher").info(
-            "fetch→analyze: follow_col=%s, source_col=%s, order=%s, owner=%s, items=%d",
-            follow_col, source_col, order_col, owner, len(out)
+        log.info(
+            "fetch_to_analyze_db_followings",
+            follow_col=follow_col,
+            source_col=source_col,
+            order_col=order_col,
+            owner=owner,
+            items=len(out),
         )
         return out
 
@@ -192,9 +242,7 @@ class FetchToAnalyzeOrchestrator:
             _job, kind, _user = str(task_id).rsplit(":", 2)
         except Exception:
             return
-        logging.getLogger("dispatcher").info(
-            "on_result: job_id=%s kind=%s user=%s", _job, kind, _user
-        )
+        log.info("on_result_received", job_id=_job, kind=kind, user=_user)
         if kind != "fetch_followings":
             return
 
@@ -209,7 +257,7 @@ class FetchToAnalyzeOrchestrator:
 
         owner = self._seed_owner(corr)
         if not owner:
-            logging.getLogger("dispatcher").warning("fetch→analyze: no owner seed for job %s", corr)
+            log.warning("fetch_to_analyze_no_owner_seed", job_id=corr)
             return
 
         limit_req = self._parse_fetch_limit(corr) or 500
@@ -222,22 +270,14 @@ class FetchToAnalyzeOrchestrator:
                 items = [str(u).strip().lower() for u in fetched if isinstance(u, str) and u.strip()]
                 if limit_req:
                     items = items[: int(limit_req)]
-                logging.getLogger("dispatcher").info(
-                    "fetch→analyze: usando %d followings del resultado (limit_req=%d)",
-                    len(items), limit_req
-                )
+                log.info("fetch_to_analyze_from_result", items=len(items), limit_req=limit_req)
         except Exception as e:
-            logging.getLogger("dispatcher").warning(
-                "fetch→analyze: error extrayendo followings del resultado: %s", e
-            )
+            log.warning("fetch_to_analyze_extract_error", error=str(e))
             items = []
 
         if not items:
             items = self._db_followings_for_owner(owner, limit=limit_req)
-            logging.getLogger("dispatcher").info(
-                "fetch→analyze: fallback a DB, obtenidos %d followings (limit_req=%d)",
-                len(items), limit_req
-            )
+            log.info("fetch_to_analyze_db_fallback", items=len(items), limit_req=limit_req)
 
         try:
             meta = _load_job_meta(self._store, corr)
@@ -250,15 +290,11 @@ class FetchToAnalyzeOrchestrator:
             pass
         
         if limit_req and len(items) > limit_req:
-            logging.getLogger("dispatcher").warning(
-                "fetch→analyze: items exceden límite (%d > %d), recortando", len(items), limit_req
-            )
+            log.warning("fetch_to_analyze_limit_trim", items=len(items), limit_req=limit_req)
             items = items[: int(limit_req)]
         
         if not items:
-            logging.getLogger("dispatcher").info(
-                "fetch→analyze: no followings disponibles para %s (fetch=%s)", owner, corr
-            )
+            log.info("fetch_to_analyze_no_items", owner=owner, fetch_job_id=corr)
             return
 
         analyze_job_id = f"analyze:{corr}"
@@ -276,23 +312,12 @@ class FetchToAnalyzeOrchestrator:
                 kind="analyze_profile",
                 priority=5,
                 batch_size=25,
-                extra={},
+                extra={"usernames": items},
                 total_items=len(items),
                 client_id=client_id,
             )
             self._store.mark_job_running(analyze_job_id)
-
-            for u in items:
-                task_id2 = f"{analyze_job_id}:analyze_profile:{u}"
-                self._store.add_task(
-                    job_id=analyze_job_id,
-                    task_id=task_id2,
-                    correlation_id=analyze_job_id,
-                    account_id=None,
-                    username=u,
-                    payload={"username": u},
-                    client_id=client_id,
-                )
+            _ensure_tasks_for_job(self._store, analyze_job_id, "analyze_profile", items, {"usernames": items})
 
             analyze_job = Job(
                 job_id=analyze_job_id,
@@ -300,17 +325,13 @@ class FetchToAnalyzeOrchestrator:
                 items=items,
                 batch_size=25,
                 priority=5,
-                extra=None,
+                extra={"usernames": items},
+                pending=self._store.list_queued_usernames(analyze_job_id),
             )
             self._router.add_job(analyze_job)
-            logging.getLogger("dispatcher").info(
-                "Creado Job analyze_profile %s (items=%d) desde fetch=%s",
-                analyze_job_id, len(items), corr
-            )
+            log.info("fetch_to_analyze_created_analyze_job", analyze_job_id=analyze_job_id, items=len(items), fetch_job_id=corr)
         except Exception as e:
-            logging.getLogger("dispatcher").warning(
-                "No se pudo crear job analyze_profile para %s: %s", corr, e
-            )
+            log.warning("fetch_to_analyze_create_failed", fetch_job_id=corr, error=str(e))
         finally:
             self._created_once.add(corr)
 
@@ -404,9 +425,9 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
                         extra = meta["extra"]
 
                         if kind == "fetch_followings":
-                            items = _derive_items_for_fetch(store, jid)
+                            items = _items_from_meta_for_job(jid, meta, store=store)
                         elif kind == "analyze_profile":
-                            items = []
+                            items = _items_from_meta_for_job(jid, meta, store=store)
                         else:
                             log.info(
                                 "job_kind_not_supported",
@@ -424,9 +445,23 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
                             batch_size=batch,
                             priority=prio,
                             extra=extra,
+                            pending=store.list_queued_usernames(jid),
                         )
 
                         try:
+                            # Evitar doble expansión Job→Tasks entre 2 dispatchers:
+                            lock_name = f"scrapinsta:expand:{jid}"
+                            got_lock = store.try_advisory_lock(lock_name, timeout_s=0)
+                            if got_lock:
+                                try:
+                                    _ensure_tasks_for_job(store, jid, kind, items, extra if isinstance(extra, dict) else None)
+                                    store.mark_job_running(jid)
+                                finally:
+                                    try:
+                                        store.release_advisory_lock(lock_name)
+                                    except Exception:
+                                        pass
+                            job.pending = store.list_queued_usernames(jid)
                             router.add_job(job)
                             jobs_active.labels(status="running").inc()
                             log.info(

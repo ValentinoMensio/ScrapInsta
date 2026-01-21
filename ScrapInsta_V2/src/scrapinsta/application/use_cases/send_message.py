@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import logging
 import time
 import re
 from typing import Optional, Protocol
 
+from scrapinsta.crosscutting.logging_config import get_logger
 from scrapinsta.application.dto.messages import (
     MessageRequest,
     MessageResult,
@@ -24,7 +24,7 @@ from scrapinsta.domain.ports.message_port import (
 
 from scrapinsta.crosscutting.retry import retry_auto, RetryError
 
-logger = logging.getLogger(__name__)
+log = get_logger("send_message")
 
 
 class SendMessageUseCase:
@@ -63,9 +63,9 @@ class SendMessageUseCase:
             start = time.time()
             snap: ProfileSnapshot = self._browser.get_profile_snapshot(username)
             snapshot_duration = time.time() - start
-            logger.info("[send_message] snapshot obtenido", extra={"username": username, "duration_ms": snapshot_duration * 1000})
+            log.info("snapshot_obtained", username=username, duration_ms=round(snapshot_duration * 1000, 2))
         except BrowserPortError as e:
-            logger.exception("[send_message] snapshot error (username=%s): %s", username, e)
+            log.error("snapshot_failed", username=username, error=str(e))
             return MessageResult(
                 success=False, 
                 error=f"snapshot failed: {e}", 
@@ -78,14 +78,14 @@ class SendMessageUseCase:
             if self._repo:
                 self._repo.upsert_profile(snap)
         except Exception as e:
-            logger.warning("[send_message] upsert_profile falló (no fatal): %s", e)
+            log.warning("profile_upsert_failed_non_fatal", username=username, error=str(e))
 
         # 2) Componer o usar mensaje proporcionado
         start = time.time()
         if req.message_text and req.message_text.strip():
             # Usuario proporciona texto directamente
             text = req.message_text.strip()
-            logger.info("[send_message] usando message_text proporcionado", extra={"username": username, "text_length": len(text)})
+            log.info("message_text_provided", username=username, text_length=len(text))
         else:
             # Componer mensaje personalizado con IA
             ctx = MessageContext(
@@ -97,7 +97,7 @@ class SendMessageUseCase:
             try:
                 text = (self._composer.compose_message(ctx, req.template_id) or "").strip()
             except Exception as e:
-                logger.exception("[send_message] compose_message error: %s", e)
+                log.error("compose_message_failed", username=username, error=str(e))
                 return MessageResult(
                     success=False, 
                     error="compose failed", 
@@ -106,7 +106,7 @@ class SendMessageUseCase:
                 )
             
             compose_duration = time.time() - start
-            logger.info("[send_message] mensaje compuesto", extra={"username": username, "duration_ms": compose_duration * 1000})
+            log.info("message_composed", username=username, duration_ms=round(compose_duration * 1000, 2))
 
         if not text:
             return MessageResult(
@@ -127,11 +127,12 @@ class SendMessageUseCase:
         # Modo dry-run (solo genera texto, no envía)
         if req.dry_run:
             total_duration = time.time() - start_total
-            logger.info("[send_message] dry_run completado", extra={
-                "username": username, 
-                "total_ms": total_duration * 1000,
-                "text_length": len(text)
-            })
+            log.info(
+                "dry_run_completed",
+                username=username,
+                total_ms=round(total_duration * 1000, 2),
+                text_length=len(text),
+            )
             return MessageResult(
                 success=True, 
                 attempts=0, 
@@ -145,17 +146,13 @@ class SendMessageUseCase:
         max_retries = req.max_retries if req.max_retries and req.max_retries > 0 else 3
         attempts = 0
         
-        logger.info("[send_message] iniciando envío", extra={
-            "username": username,
-            "max_retries": max_retries,
-            "text_length": len(text)
-        })
+        log.info("send_starting", username=username, max_retries=max_retries, text_length=len(text))
 
         @retry_auto(max_retries=max_retries)
         def _send_with_retry() -> bool:
             nonlocal attempts
             attempts += 1
-            logger.debug("[send_message] intento %d de %d", attempts, max_retries)
+            log.debug("send_attempt", username=username, attempt=attempts, max_retries=max_retries)
             return self._sender.send_direct_message(username, text)
 
         try:
@@ -163,17 +160,10 @@ class SendMessageUseCase:
             total_duration = time.time() - start_total
             
             if ok:
-                logger.info("[send_message] envío exitoso", extra={
-                    "username": username,
-                    "attempts": attempts,
-                    "total_ms": total_duration * 1000
-                })
+                log.info("send_success", username=username, attempts=attempts, total_ms=round(total_duration * 1000, 2))
                 return MessageResult(success=True, attempts=attempts, target_username=username)
             
-            logger.warning("[send_message] sender retornó False", extra={
-                "username": username,
-                "attempts": attempts
-            })
+            log.warning("send_returned_false", username=username, attempts=attempts)
             return MessageResult(
                 success=False, 
                 attempts=attempts, 
@@ -182,11 +172,7 @@ class SendMessageUseCase:
             )
             
         except RetryError as re:
-            logger.error("[send_message] retry agotado al enviar DM", extra={
-                "username": username,
-                "attempts": attempts,
-                "error": str(re)
-            })
+            log.error("send_retry_exhausted", username=username, attempts=attempts, error=str(re))
             return MessageResult(
                 success=False, 
                 attempts=attempts, 
@@ -195,11 +181,7 @@ class SendMessageUseCase:
             )
             
         except DMTransientUIBlock as e:
-            logger.error("[send_message] UI block después de retries", extra={
-                "username": username,
-                "attempts": attempts,
-                "error": str(e)
-            })
+            log.error("send_ui_block_after_retries", username=username, attempts=attempts, error=str(e))
             return MessageResult(
                 success=False, 
                 attempts=attempts, 
@@ -208,11 +190,7 @@ class SendMessageUseCase:
             )
             
         except DMUnexpectedError as e:
-            logger.error("[send_message] error no-reintentable", extra={
-                "username": username,
-                "attempts": max(1, attempts),
-                "error": str(e)
-            })
+            log.error("send_non_retryable_error", username=username, attempts=max(1, attempts), error=str(e))
             return MessageResult(
                 success=False, 
                 attempts=max(1, attempts), 
@@ -221,10 +199,7 @@ class SendMessageUseCase:
             )
             
         except Exception as e:
-            logger.exception("[send_message] error inesperado al enviar DM", extra={
-                "username": username,
-                "attempts": max(1, attempts)
-            })
+            log.error("send_unexpected_error", username=username, attempts=max(1, attempts), error=str(e))
             return MessageResult(
                 success=False, 
                 attempts=max(1, attempts), 

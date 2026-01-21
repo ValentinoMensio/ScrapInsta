@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import random
 from typing import Optional
 
@@ -11,7 +10,9 @@ from selenium.webdriver.remote.webelement import WebElement
 from . import tempo
 from .tempo import HumanScheduler
 
-log = logging.getLogger(__name__)
+from scrapinsta.crosscutting.logging_config import get_logger
+
+log = get_logger("human_actions")
 
 
 def hover_element_human(
@@ -49,7 +50,7 @@ def hover_element_human(
         tempo.sleep_jitter(random.uniform(0.12, 0.3), 0.5)
 
     except Exception as e:
-        log.debug("hover_element_human: fallo no crítico: %s", e)
+        log.debug("hover_element_failed_non_fatal", error=str(e))
 
 
 def human_scroll(

@@ -8,7 +8,10 @@ from typing import Optional, List, Dict, Any
 from urllib.parse import urlparse, quote_plus
 import json, os
 
+from scrapinsta.crosscutting.logging_config import get_logger
+
 load_dotenv()
+log = get_logger("settings")
 
 # -----------------------------
 # BASE_DIR: Raíz del proyecto
@@ -153,7 +156,7 @@ class Settings(BaseSettings):
         try:
             return json.loads(p.read_text(encoding="utf-8"))
         except Exception as e:
-            print(f"[settings] error leyendo JSON en {p}: {e}")
+            log.warning("settings_json_file_read_failed", path=str(p), error=str(e))
             return None
 
     def _read_json_from_env(self, env_name: str) -> Optional[Any]:
@@ -163,7 +166,7 @@ class Settings(BaseSettings):
         try:
             return json.loads(raw)
         except Exception as e:
-            print(f"[settings] error parseando {env_name}: {e}")
+            log.warning("settings_json_env_parse_failed", env_name=env_name, error=str(e))
             return None
 
     def _normalize_accounts_payload(self, payload: Any) -> List[dict]:

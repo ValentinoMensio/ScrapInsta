@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Protocol, Callable, Any, Dict, Tuple
 
 from scrapinsta.application.dto.tasks import TaskEnvelope, ResultEnvelope
+from scrapinsta.crosscutting.logging_config import get_logger
 
 from scrapinsta.application.dto.profiles import AnalyzeProfileRequest
 from scrapinsta.application.dto.messages import MessageRequest
@@ -14,7 +14,7 @@ from scrapinsta.application.use_cases.analyze_profile import AnalyzeProfileUseCa
 from scrapinsta.application.use_cases.send_message import SendMessageUseCase
 from scrapinsta.application.use_cases.fetch_followings import FetchFollowingsUseCase
 
-logger = logging.getLogger(__name__)
+log = get_logger("task_dispatcher")
 
 
 # ----------------------------
@@ -72,7 +72,7 @@ class TaskDispatcher:
         try:
             dto = route.parser(env.payload or {})
         except Exception as e:
-            logger.exception("payload parse error: %s", e)
+            log.error("task_payload_parse_error", task=env.task, error=str(e))
             return ResultEnvelope(
                 ok=False,
                 error=f"payload invalid: {e}",
@@ -94,7 +94,7 @@ class TaskDispatcher:
                 correlation_id=env.correlation_id,
             )
         except Exception as e:
-            logger.exception("use case execution failed: %s", e)
+            log.error("use_case_execution_failed", task=env.task, error=str(e))
             return ResultEnvelope(
                 ok=False,
                 error=str(e),

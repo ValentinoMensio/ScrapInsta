@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timedelta
 from typing import Callable, TypeVar, Sequence, Optional, Tuple
 
 from scrapinsta.application.dto.profiles import AnalyzeProfileRequest, AnalyzeProfileResponse
+from scrapinsta.crosscutting.logging_config import get_logger
 
 from scrapinsta.domain.models.profile_models import (
     ProfileSnapshot,
@@ -20,7 +20,7 @@ from scrapinsta.infrastructure.redis import CacheService
 from scrapinsta.application.services.evaluator import evaluate_profile
 
 T = TypeVar("T")
-logger = logging.getLogger(__name__)
+log = get_logger("analyze_profile")
 
 
 def _avg(nums: Sequence[float | int]) -> float:
@@ -87,13 +87,13 @@ class AnalyzeProfileUseCase:
 
     def __call__(self, req: AnalyzeProfileRequest) -> AnalyzeProfileResponse:
         username = req.username.strip().lstrip("@").lower()
-        logger.info("AnalyzeProfile: start username=%s", username)
+        log.info("analyze_profile_start", username=username)
 
         # Intentar obtener desde caché primero
         if self.cache_service:
             cached_analysis = self.cache_service.get_profile_analysis(username)
             if cached_analysis:
-                logger.info("AnalyzeProfile: cache hit username=%s", username)
+                log.info("analyze_profile_cache_hit", username=username)
                 try:
                     # Reconstruir respuesta desde caché
                     # Nota: Esto requiere serialización/deserialización completa de los modelos
@@ -107,7 +107,7 @@ class AnalyzeProfileUseCase:
                         skipped_recent=True
                     )
                 except Exception as e:
-                    logger.warning("AnalyzeProfile: error deserializando caché: %s", e)
+                    log.warning("analyze_profile_cache_deserialize_failed", username=username, error=str(e))
 
         if self.profile_repo:
             last_analysis = self.profile_repo.get_last_analysis_date(username)
@@ -115,8 +115,7 @@ class AnalyzeProfileUseCase:
                 try:
                     last_date = datetime.fromisoformat(last_analysis.replace('Z', '+00:00'))
                     if datetime.now(last_date.tzinfo) - last_date < timedelta(days=30):
-                        logger.info("AnalyzeProfile: usuario %s analizado recientemente (%s), saltando", 
-                                  username, last_analysis)
+                        log.info("analyze_profile_skipped_recent", username=username, last_analysis=last_analysis)
                         return AnalyzeProfileResponse(
                             snapshot=None, 
                             recent_reels=[], 
@@ -125,10 +124,16 @@ class AnalyzeProfileUseCase:
                             skipped_recent=True
                         )
                 except Exception as e:
-                    logger.warning("AnalyzeProfile: error parseando fecha de último análisis: %s", e)
+                    log.warning("analyze_profile_last_analysis_parse_failed", username=username, error=str(e))
 
         snapshot: ProfileSnapshot = self._retry(lambda: self.browser.get_profile_snapshot(username))
-        _ = self._retry(lambda: self.browser.detect_rubro(username, snapshot.bio))
+        rubro = self._retry(lambda: self.browser.detect_rubro(username, snapshot.bio))
+        if rubro and not getattr(snapshot, "rubro", None):
+            # ProfileSnapshot es inmutable (frozen=True): usamos model_copy para agregar rubro.
+            try:
+                snapshot = snapshot.model_copy(update={"rubro": rubro})
+            except Exception:
+                pass
 
         recent_reels: list[ReelMetrics] = []
         recent_posts: list[PostMetrics] = []
@@ -143,13 +148,20 @@ class AnalyzeProfileUseCase:
                     pid = self.profile_repo.upsert_profile(snapshot)
                     self.profile_repo.save_analysis_snapshot(pid, snapshot, None, recent_reels, recent_posts)
                 except Exception as e:
-                    logger.warning("AnalyzeProfile: DB save (private) failed: %s", e)
+                    log.warning("analyze_profile_db_save_private_failed", username=username, error=str(e))
             return resp
 
         if req.fetch_reels:
             reels_result = self._retry(lambda: self.browser.get_reel_metrics(username, max_reels=req.max_reels))
             if isinstance(reels_result, tuple) and len(reels_result) == 2:
                 recent_reels, basic = reels_result
+                # Algunos adapters devuelven BasicStats "vacío" (avg_* None). En ese caso,
+                # lo computamos desde los reels para que engagement/success no queden en 0/0.2 por defecto.
+                try:
+                    if basic and basic.avg_views_last_n is None and basic.avg_likes_last_n is None and basic.avg_comments_last_n is None:
+                        basic = _compute_basic_stats_from_reels(recent_reels)
+                except Exception:
+                    pass
             else:
                 recent_reels = list(reels_result)
                 basic = _compute_basic_stats_from_reels(recent_reels)
@@ -177,16 +189,16 @@ class AnalyzeProfileUseCase:
                     "recent_posts": [p.model_dump() if hasattr(p, "model_dump") else p.__dict__ for p in recent_posts] if recent_posts else [],
                 }
                 self.cache_service.set_profile_analysis(username, cache_data)
-                logger.debug("AnalyzeProfile: cached analysis for username=%s", username)
+                log.debug("analyze_profile_cache_saved", username=username)
             except Exception as e:
-                logger.warning("AnalyzeProfile: cache save failed: %s", e)
+                log.warning("analyze_profile_cache_save_failed", username=username, error=str(e))
 
         if self.profile_repo:
             try:
                 pid = self.profile_repo.upsert_profile(snapshot)
                 self.profile_repo.save_analysis_snapshot(pid, snapshot, basic, recent_reels, recent_posts)
             except Exception as e:
-                logger.warning("AnalyzeProfile: DB save failed: %s", e)
+                log.warning("analyze_profile_db_save_failed", username=username, error=str(e))
 
         return resp
 

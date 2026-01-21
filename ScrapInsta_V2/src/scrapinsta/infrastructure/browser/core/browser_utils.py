@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import re
 import shutil
 import subprocess
@@ -9,7 +8,9 @@ from typing import Optional, Tuple
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
-logger = logging.getLogger(__name__)
+from scrapinsta.crosscutting.logging_config import get_logger
+
+log = get_logger("browser_utils")
 
 
 # ------------------------------ helpers genéricos ------------------------------
@@ -41,14 +42,14 @@ def quick_probe(driver, *, timeout: int = 6) -> None:
         driver.get("https://api.ipify.org?format=json")
         WebDriverWait(driver, timeout).until(lambda d: d.find_element(By.TAG_NAME, "body"))
         body = driver.find_element(By.TAG_NAME, "body").text
-        logger.info("ipify: %s", body[:180].replace("\n", " "))
+        log.info("ipify_response", body=(body[:180].replace("\n", " ")))
     except Exception as e:
-        logger.debug("ipify error: %s", e)
+        log.debug("ipify_probe_failed", error=str(e))
 
     try:
         driver.get("https://httpbin.org/headers")
         WebDriverWait(driver, timeout).until(lambda d: d.find_element(By.TAG_NAME, "body"))
-        logger.debug("httpbin headers ok")
+        log.debug("httpbin_headers_ok")
     except Exception:
         pass
 
@@ -59,7 +60,7 @@ def safe_quit(driver) -> None:
         try:
             driver.quit()
         except Exception:
-            logger.debug("Error cerrando driver", exc_info=True)
+            log.debug("driver_quit_failed")
 
 
 def detect_chrome_major() -> Optional[int]:
