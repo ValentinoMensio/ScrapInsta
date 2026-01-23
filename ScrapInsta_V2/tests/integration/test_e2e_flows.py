@@ -104,22 +104,48 @@ def mock_message_composer() -> Mock:
 
 
 @pytest.fixture
-def api_client(mock_job_store: Mock, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def mock_client_repo() -> Mock:
+    """Mock de ClientRepo para tests E2E."""
+    mock = MagicMock()
+    mock.get_by_id.return_value = None
+    mock.get_by_api_key.return_value = None
+    mock.get_limits.return_value = {}
+    return mock
+
+
+@pytest.fixture
+def api_client(mock_job_store: Mock, mock_client_repo: Mock, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """
-    TestClient de FastAPI con JobStore mockeado.
+    TestClient de FastAPI con JobStore y ClientRepo mockeados.
     
-    Reemplaza el singleton _job_store en api.py con nuestro mock.
+    Usa el nuevo sistema de dependencias con app.state.dependencies.
     """
     # Configurar variables de entorno para autenticación
     monkeypatch.setenv("API_SHARED_SECRET", "test-secret-key")
     monkeypatch.setenv("REQUIRE_HTTPS", "false")
     
-    # Patch del _job_store global en api.py
-    with patch('scrapinsta.interface.api._job_store', mock_job_store):
-        # Patch de API_SHARED_SECRET y _CLIENTS para usar modo simple
-        with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
-            with patch('scrapinsta.interface.api._CLIENTS', {}):
-                yield TestClient(app)
+    # Mockear dependencias en app.state.dependencies (nuevo sistema)
+    from scrapinsta.interface.dependencies import Dependencies
+    from scrapinsta.config.settings import Settings
+    
+    mock_deps = Dependencies(
+        settings=Settings(),
+        job_store=mock_job_store,
+        client_repo=mock_client_repo,
+    )
+    
+    # Actualizar app.state.dependencies con el mock
+    app.state.dependencies = mock_deps
+    
+    # Mockear get_dependencies() y variables globales
+    with patch('scrapinsta.interface.dependencies.get_dependencies', return_value=mock_deps):
+        with patch('scrapinsta.interface.api._job_store', mock_job_store):
+            with patch('scrapinsta.interface.api._client_repo', mock_client_repo):
+                with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
+                    with patch('scrapinsta.interface.api._CLIENTS', {}):
+                        with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
+                            with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
+                                yield TestClient(app)
 
 
 @pytest.fixture

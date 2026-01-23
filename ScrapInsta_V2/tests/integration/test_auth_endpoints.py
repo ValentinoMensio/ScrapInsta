@@ -22,10 +22,13 @@ def get_error_message(response) -> str:
 
 
 @pytest.fixture
-def mock_client_repo(monkeypatch: pytest.MonkeyPatch):
+def mock_client_repo():
     """Mock de ClientRepoSQL."""
     mock = MagicMock()
-    monkeypatch.setattr("scrapinsta.interface.api._client_repo", mock)
+    # Configurar valores por defecto
+    mock.get_by_id.return_value = None
+    mock.get_by_api_key.return_value = None
+    mock.get_limits.return_value = {}
     return mock
 
 
@@ -34,19 +37,36 @@ def api_client(mock_client_repo, mock_job_store: Mock, monkeypatch: pytest.Monke
     """TestClient de FastAPI con repos mockeados."""
     monkeypatch.setenv("API_SHARED_SECRET", "test-secret-key")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt-secret")
+    monkeypatch.setenv("REQUIRE_HTTPS", "false")
     
-    import scrapinsta.interface.api as api_module
-    monkeypatch.setattr(api_module, "_job_store", mock_job_store)
-    monkeypatch.setattr(api_module, "_client_repo", mock_client_repo)
-    monkeypatch.setattr(api_module, "API_SHARED_SECRET", "test-secret-key")
-    monkeypatch.setattr(api_module, "_CLIENTS", None)
+    # Mockear dependencias en app.state.dependencies (nuevo sistema)
+    from scrapinsta.interface.dependencies import Dependencies
+    from scrapinsta.config.settings import Settings
     
+    mock_deps = Dependencies(
+        settings=Settings(),
+        job_store=mock_job_store,
+        client_repo=mock_client_repo,
+    )
+    
+    # Actualizar app.state.dependencies con el mock
+    app.state.dependencies = mock_deps
+    
+    # Configurar mocks básicos
     mock_job_store.pending_jobs.return_value = []
     mock_job_store.job_summary.return_value = {"queued": 0, "sent": 0, "ok": 0, "error": 0}
     mock_job_store.lease_tasks.return_value = []
     mock_job_store.get_job_client_id.return_value = "default"
     
-    return TestClient(app)
+    # Mockear get_dependencies() y variables globales
+    with patch('scrapinsta.interface.dependencies.get_dependencies', return_value=mock_deps):
+        with patch('scrapinsta.interface.api._job_store', mock_job_store):
+            with patch('scrapinsta.interface.api._client_repo', mock_client_repo):
+                with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
+                    with patch('scrapinsta.interface.api._CLIENTS', {}):
+                        with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
+                            with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
+                                yield TestClient(app)
 
 
 class TestLoginEndpoint:

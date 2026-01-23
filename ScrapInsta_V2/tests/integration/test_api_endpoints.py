@@ -47,15 +47,46 @@ def mock_job_store() -> Mock:
 
 
 @pytest.fixture
-def api_client(mock_job_store: Mock, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """TestClient de FastAPI con JobStore mockeado."""
+def mock_client_repo() -> Mock:
+    """Mock de ClientRepo para tests."""
+    mock = MagicMock()
+    # Configurar valores por defecto
+    mock.get_by_id.return_value = None
+    mock.get_by_api_key.return_value = None
+    mock.get_limits.return_value = {}
+    return mock
+
+
+@pytest.fixture
+def api_client(mock_job_store: Mock, mock_client_repo: Mock, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """TestClient de FastAPI con JobStore y ClientRepo mockeados."""
     monkeypatch.setenv("API_SHARED_SECRET", "test-secret-key")
     monkeypatch.setenv("REQUIRE_HTTPS", "false")
     
-    with patch('scrapinsta.interface.api._job_store', mock_job_store):
-        with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
-            with patch('scrapinsta.interface.api._CLIENTS', {}):
-                yield TestClient(app)
+    # Mockear dependencias en app.state.dependencies (nuevo sistema)
+    # También mantener compatibilidad con variables globales por si acaso
+    from scrapinsta.interface.dependencies import Dependencies
+    from scrapinsta.config.settings import Settings
+    
+    mock_deps = Dependencies(
+        settings=Settings(),
+        job_store=mock_job_store,
+        client_repo=mock_client_repo,
+    )
+    
+    # Actualizar app.state.dependencies con el mock
+    app.state.dependencies = mock_deps
+    
+    # Mockear get_dependencies() para que retorne las dependencias mockeadas
+    # También mockear API_SHARED_SECRET en el módulo de autenticación
+    with patch('scrapinsta.interface.dependencies.get_dependencies', return_value=mock_deps):
+        with patch('scrapinsta.interface.api._job_store', mock_job_store):
+            with patch('scrapinsta.interface.api._client_repo', mock_client_repo):
+                with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
+                    with patch('scrapinsta.interface.api._CLIENTS', {}):
+                        with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
+                            with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
+                                yield TestClient(app)
 
 
 @pytest.fixture
@@ -237,7 +268,7 @@ class TestEnqueueFollowings:
         assert call_kwargs["extra"]["target_username"] == "testuser"
     
     def test_enqueue_followings_bearer_auth(
-        self, api_client: TestClient, mock_job_store: Mock, auth_headers_bearer: Dict[str, str], monkeypatch: pytest.MonkeyPatch
+        self, api_client: TestClient, mock_job_store: Mock, mock_client_repo: Mock, auth_headers_bearer: Dict[str, str]
     ):
         """Enqueue funciona con Authorization Bearer."""
         from unittest.mock import patch
@@ -248,11 +279,13 @@ class TestEnqueueFollowings:
                 return {"client_id": "default", "scopes": ["fetch", "analyze", "send"]}
             return None
         
-        with patch("scrapinsta.interface.api.verify_token", side_effect=mock_verify_token):
-            with patch("scrapinsta.interface.api._client_repo") as mock_repo:
-                mock_repo.get_by_id.return_value = {"id": "default", "status": "active"}
-                mock_repo.get_limits.return_value = {"requests_per_minute": 60}
-                
+        # Configurar mock del client_repo para Bearer auth
+        mock_client_repo.get_by_id.return_value = {"id": "default", "status": "active"}
+        mock_client_repo.get_limits.return_value = {"requests_per_minute": 60}
+        
+        # Patch verify_token en el módulo donde se usa
+        with patch("scrapinsta.infrastructure.auth.jwt_auth.verify_token", side_effect=mock_verify_token):
+            with patch("scrapinsta.interface.auth.authentication.verify_token", side_effect=mock_verify_token):
                 response = api_client.post(
                     "/ext/followings/enqueue",
                     json={"target_username": "testuser", "limit": 10},

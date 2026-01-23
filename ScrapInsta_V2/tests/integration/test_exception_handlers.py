@@ -21,7 +21,7 @@ from scrapinsta.crosscutting.exceptions import (
 
 
 @pytest.fixture
-def mock_job_store(monkeypatch: pytest.MonkeyPatch) -> Mock:
+def mock_job_store() -> Mock:
     """Mock de JobStoreSQL."""
     mock = MagicMock()
     mock.pending_jobs.return_value = []
@@ -31,18 +31,16 @@ def mock_job_store(monkeypatch: pytest.MonkeyPatch) -> Mock:
     mock.mark_task_ok.return_value = None
     mock.mark_task_error.return_value = None
     mock.all_tasks_finished.return_value = False
-    monkeypatch.setattr("scrapinsta.interface.api._job_store", mock)
     return mock
 
 
 @pytest.fixture
-def mock_client_repo(monkeypatch: pytest.MonkeyPatch) -> Mock:
+def mock_client_repo() -> Mock:
     """Mock de ClientRepoSQL."""
     mock = MagicMock()
     mock.get_by_id.return_value = {"id": "default", "status": "active"}
     mock.get_limits.return_value = {"requests_per_minute": 60}
     mock.get_by_api_key.return_value = {"id": "default", "status": "active"}
-    monkeypatch.setattr("scrapinsta.interface.api._client_repo", mock)
     return mock
 
 
@@ -52,12 +50,28 @@ def api_client(monkeypatch: pytest.MonkeyPatch, mock_job_store: Mock, mock_clien
     monkeypatch.setenv("API_SHARED_SECRET", "test-secret-key")
     monkeypatch.setenv("REQUIRE_HTTPS", "false")
     
-    # Configurar API_SHARED_SECRET en el módulo
-    import scrapinsta.interface.api as api_module
-    monkeypatch.setattr(api_module, "API_SHARED_SECRET", "test-secret-key")
-    monkeypatch.setattr(api_module, "_CLIENTS", {})
+    # Mockear dependencias en app.state.dependencies (nuevo sistema)
+    from scrapinsta.interface.dependencies import Dependencies
+    from scrapinsta.config.settings import Settings
     
-    return TestClient(app)
+    mock_deps = Dependencies(
+        settings=Settings(),
+        job_store=mock_job_store,
+        client_repo=mock_client_repo,
+    )
+    
+    # Actualizar app.state.dependencies con el mock
+    app.state.dependencies = mock_deps
+    
+    # Mockear get_dependencies() y variables globales
+    with patch('scrapinsta.interface.dependencies.get_dependencies', return_value=mock_deps):
+        with patch('scrapinsta.interface.api._job_store', mock_job_store):
+            with patch('scrapinsta.interface.api._client_repo', mock_client_repo):
+                with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
+                    with patch('scrapinsta.interface.api._CLIENTS', {}):
+                        with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
+                            with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
+                                yield TestClient(app)
 
 
 class TestScrapInstaHTTPErrorHandler:
@@ -78,25 +92,32 @@ class TestScrapInstaHTTPErrorHandler:
     
     def test_forbidden_error_format(self, api_client: TestClient):
         """Error 403 tiene formato consistente."""
-        with patch("scrapinsta.interface.api._check_scope") as mock_scope:
+        # Patch en los módulos donde realmente se usan (incluyendo routers)
+        with patch("scrapinsta.interface.auth.authentication.check_scope") as mock_scope:
             mock_scope.side_effect = InvalidScopeError(
                 "Scope 'admin' requerido",
                 details={"required_scope": "admin", "available_scopes": ["fetch"]}
             )
             
-            with patch("scrapinsta.interface.api._auth_client") as mock_auth:
+            with patch("scrapinsta.interface.auth.authentication.authenticate_client") as mock_auth:
                 mock_auth.return_value = {"id": "client1", "scopes": ["fetch"], "rate": 60}
                 
-                response = api_client.post(
-                    "/api/send/pull",
-                    json={"limit": 10},
-                    headers={"X-Api-Key": "test-key", "X-Account": "test-account"}
-                )
-                
-                assert response.status_code == 403
-                data = response.json()
-                assert data["error"]["code"] == "INSUFFICIENT_SCOPE"
-                assert "details" in data["error"]
+                # Patch también en los routers que importan estas funciones
+                with patch("scrapinsta.interface.routers.send_router.authenticate_client", mock_auth):
+                    with patch("scrapinsta.interface.routers.send_router.check_scope", mock_scope):
+                        # También patch en api.py para compatibilidad
+                        with patch("scrapinsta.interface.api._check_scope", mock_scope):
+                            with patch("scrapinsta.interface.api._auth_client", mock_auth):
+                                response = api_client.post(
+                                    "/api/send/pull",
+                                    json={"limit": 10},
+                                    headers={"X-Api-Key": "test-key", "X-Account": "test-account"}
+                                )
+                                
+                                assert response.status_code == 403
+                                data = response.json()
+                                assert data["error"]["code"] == "INSUFFICIENT_SCOPE"
+                                assert "details" in data["error"]
     
     def test_not_found_error_format(self, api_client: TestClient, mock_job_store: Mock, mock_client_repo: Mock):
         """Error 404 tiene formato consistente."""
@@ -113,25 +134,32 @@ class TestScrapInstaHTTPErrorHandler:
     
     def test_rate_limit_error_format(self, api_client: TestClient):
         """Error 429 tiene formato consistente."""
-        with patch("scrapinsta.interface.api._rate_limit") as mock_rate:
+        # Patch en los módulos donde realmente se usan (incluyendo routers)
+        with patch("scrapinsta.interface.auth.rate_limiting.rate_limit") as mock_rate:
             mock_rate.side_effect = RateLimitError(
                 "Límite de tasa excedido",
                 details={"client_id": "client1", "limit_type": "client"}
             )
             
-            with patch("scrapinsta.interface.api._auth_client") as mock_auth:
+            with patch("scrapinsta.interface.auth.authentication.authenticate_client") as mock_auth:
                 mock_auth.return_value = {"id": "client1", "scopes": ["send"], "rate": 60}
                 
-                response = api_client.post(
-                    "/api/send/pull",
-                    json={"limit": 10},
-                    headers={"X-Api-Key": "test-key", "X-Account": "test-account"}
-                )
-                
-                assert response.status_code == 429
-                data = response.json()
-                assert data["error"]["code"] == "RATE_LIMIT_EXCEEDED"
-                assert "details" in data["error"]
+                # Patch también en los routers que importan estas funciones
+                with patch("scrapinsta.interface.routers.send_router.authenticate_client", mock_auth):
+                    with patch("scrapinsta.interface.routers.send_router.rate_limit", mock_rate):
+                        # También patch en api.py para compatibilidad
+                        with patch("scrapinsta.interface.api._rate_limit", mock_rate):
+                            with patch("scrapinsta.interface.api._auth_client", mock_auth):
+                                response = api_client.post(
+                                    "/api/send/pull",
+                                    json={"limit": 10},
+                                    headers={"X-Api-Key": "test-key", "X-Account": "test-account"}
+                                )
+                                
+                                assert response.status_code == 429
+                                data = response.json()
+                                assert data["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+                                assert "details" in data["error"]
 
 
 class TestFastAPIHTTPExceptionHandler:
@@ -227,23 +255,31 @@ class TestErrorResponseStructure:
     
     def test_error_response_with_details(self, api_client: TestClient):
         """Respuestas de error pueden incluir detalles adicionales."""
-        with patch("scrapinsta.interface.api._check_scope") as mock_scope:
+        # Patch en los módulos donde realmente se usan (incluyendo routers)
+        with patch("scrapinsta.interface.auth.authentication.check_scope") as mock_scope:
             mock_scope.side_effect = InvalidScopeError(
                 "Scope requerido",
                 details={"required_scope": "admin", "available_scopes": ["fetch"]}
             )
             
-            with patch("scrapinsta.interface.api._auth_client") as mock_auth:
+            with patch("scrapinsta.interface.auth.authentication.authenticate_client") as mock_auth:
                 mock_auth.return_value = {"id": "client1", "scopes": ["fetch"], "rate": 60}
                 
-                response = api_client.post(
-                    "/api/send/pull",
-                    json={"limit": 10},
-                    headers={"X-Api-Key": "test-key", "X-Account": "test-account"}
-                )
-                
-                assert response.status_code == 403
-                data = response.json()
-                assert "details" in data["error"]
-                assert data["error"]["details"]["required_scope"] == "admin"
+                # Patch también en los routers que importan estas funciones
+                with patch("scrapinsta.interface.routers.send_router.authenticate_client", mock_auth):
+                    with patch("scrapinsta.interface.routers.send_router.check_scope", mock_scope):
+                        # También patch en api.py para compatibilidad
+                        with patch("scrapinsta.interface.api._check_scope", mock_scope):
+                            with patch("scrapinsta.interface.api._auth_client", mock_auth):
+                                response = api_client.post(
+                                    "/api/send/pull",
+                                    json={"limit": 10},
+                                    headers={"X-Api-Key": "test-key", "X-Account": "test-account"}
+                                )
+                                
+                                assert response.status_code == 403
+                                data = response.json()
+                                assert "error" in data
+                                assert "details" in data["error"]
+                                assert data["error"]["details"]["required_scope"] == "admin"
 

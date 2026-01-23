@@ -166,12 +166,19 @@ def _ensure_tasks_for_job(store: JobStoreSQL, job_id: str, kind: str, items: Lis
 
 
 class FetchToAnalyzeOrchestrator:
-    """Encadena fetch_followings → analyze_profile, de forma idempotente (una sola vez por fetch)."""
+    """
+    Encadena fetch_followings → analyze_profile, de forma idempotente (una sola vez por fetch).
+    
+    NOTA: Usa persistencia en BD en lugar de estado in-memory para garantizar idempotencia
+    en entornos multi-dispatcher. El estado se verifica consultando si el job de análisis
+    ya existe en la base de datos.
+    """
 
     def __init__(self, store: JobStoreSQL, router: Router) -> None:
         self._store = store
         self._router = router
-        self._created_once: Set[str] = set()
+        # Removido: self._created_once: Set[str] = set()
+        # Ahora usamos persistencia en BD para garantizar idempotencia multi-dispatcher
 
     def _seed_owner(self, job_id: str) -> Optional[str]:
         try:
@@ -252,7 +259,16 @@ class FetchToAnalyzeOrchestrator:
         except Exception:
             return
 
-        if corr in self._created_once:
+        # Verificar idempotencia usando BD en lugar de estado in-memory
+        # Esto garantiza que múltiples dispatchers no creen jobs duplicados
+        analyze_job_id = f"analyze:{corr}"
+        if self._store.job_exists(analyze_job_id):
+            log.debug(
+                "fetch_to_analyze_job_already_exists",
+                fetch_job_id=corr,
+                analyze_job_id=analyze_job_id,
+                message="Job de análisis ya fue creado, saltando creación"
+            )
             return
 
         owner = self._seed_owner(corr)
@@ -297,7 +313,7 @@ class FetchToAnalyzeOrchestrator:
             log.info("fetch_to_analyze_no_items", owner=owner, fetch_job_id=corr)
             return
 
-        analyze_job_id = f"analyze:{corr}"
+        # analyze_job_id ya fue definido arriba para verificar idempotencia
         client_id = self._store.get_job_client_id(corr)
         if not client_id:
             log.error(
@@ -332,13 +348,18 @@ class FetchToAnalyzeOrchestrator:
             log.info("fetch_to_analyze_created_analyze_job", analyze_job_id=analyze_job_id, items=len(items), fetch_job_id=corr)
         except Exception as e:
             log.warning("fetch_to_analyze_create_failed", fetch_job_id=corr, error=str(e))
-        finally:
-            self._created_once.add(corr)
+            # No agregamos a _created_once porque ya no existe
+            # La idempotencia se garantiza consultando BD en la próxima ejecución
 
 
 def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 0.05) -> None:
+    """
+    Función principal del dispatcher - orquesta todos los servicios.
+    
+    Refactorizado para usar servicios separados (WorkerManager, JobScanner,
+    LeaseCleaner, MaintenanceCleaner) mejorando separación de responsabilidades.
+    """
     # Logging ya está configurado al importar el módulo
-    # Si se necesita cambiar el nivel, se puede hacer aquí
     if log_level != os.getenv("LOG_LEVEL", "INFO"):
         configure_structured_logging(
             level=log_level,
@@ -346,6 +367,7 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
             include_process_id=True,
         )
 
+    # Inicialización
     settings = Settings()
     log.info("dispatcher_starting", db_dsn=settings.db_dsn)
     store = JobStoreSQL(settings.db_dsn)
@@ -359,29 +381,57 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
     task_qs, result_qs, backend_name = build_queues(settings=settings, accounts=accounts)
     log.info("queues_initialized", backend=backend_name, account_count=len(accounts))
 
-    send_by_acc: Dict[str, callable] = {}
-    stop_events: Dict[str, mp.Event] = {}
-    procs: Dict[str, mp.Process] = {}
-    for acc in accounts:
-        sev = mp.Event()
-        stop_events[acc] = sev
-        send_by_acc[acc] = task_qs[acc].send
-        proc = _start_worker_process(acc, task_qs[acc], result_qs[acc], sev, settings)
-        procs[acc] = proc
-        workers_active.labels(account=acc).inc()
-        log.info("worker_started", account=acc, pid=proc.pid)
+    # Inicializar servicios
+    from scrapinsta.interface.dispatcher.services import (
+        WorkerManager,
+        JobScanner,
+        LeaseCleaner,
+        MaintenanceCleaner,
+    )
+    
+    worker_manager = WorkerManager(
+        accounts=accounts,
+        task_qs=task_qs,
+        result_qs=result_qs,
+        settings=settings,
+        start_worker_fn=_start_worker_process,
+    )
+    worker_manager.start_all()
 
     router = Router(
-        accounts=accounts, 
-        send_fn_by_account=send_by_acc, 
+        accounts=accounts,
+        send_fn_by_account=worker_manager.get_send_functions(),
         job_store=store,
         config=settings.get_router_config(),
     )
 
+    job_scanner = JobScanner(
+        store=store,
+        router=router,
+        load_job_meta_fn=_load_job_meta,
+        items_from_meta_fn=_items_from_meta_for_job,
+        ensure_tasks_fn=_ensure_tasks_for_job,
+    )
+
+    lease_cleaner = LeaseCleaner(
+        store=store,
+        interval=float(os.getenv("LEASE_CLEANUP_INTERVAL", "60")),
+        max_reclaimed=int(os.getenv("LEASE_CLEANUP_MAX_RECLAIMED", "100")),
+    )
+
+    maintenance_cleaner = MaintenanceCleaner(
+        store=store,
+        interval=float(os.getenv("CLEANUP_INTERVAL", "86400")),
+        stale_days=int(os.getenv("CLEANUP_STALE_DAYS", "1")),
+        finished_days=int(os.getenv("CLEANUP_FINISHED_DAYS", "90")),
+        batch_size=int(os.getenv("CLEANUP_BATCH_SIZE", "1000")),
+    )
+
     f2a = FetchToAnalyzeOrchestrator(store, router)
 
-    loaded_jobs: Set[str] = set()
+    # Control de shutdown
     stop = {"flag": False}
+    last_scan = 0.0
 
     def _sigterm(*_a):
         log.warning("shutdown_signal_received", signal="SIGTERM/SIGINT")
@@ -393,179 +443,28 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
 
     log.info("dispatcher_ready", scan_interval_s=scan_every_s, accounts=accounts)
 
-    last_scan = 0.0
-    last_cleanup = 0.0
-    last_lease_cleanup = 0.0
-    lease_cleanup_interval = float(os.getenv("LEASE_CLEANUP_INTERVAL", "60"))
-    max_reclaimed_per_run = int(os.getenv("LEASE_CLEANUP_MAX_RECLAIMED", "100"))
-    cleanup_interval = float(os.getenv("CLEANUP_INTERVAL", "86400"))  # Default: 24 horas
-    cleanup_stale_days = int(os.getenv("CLEANUP_STALE_DAYS", "1"))  # Default: 1 día
-    cleanup_finished_days = int(os.getenv("CLEANUP_FINISHED_DAYS", "90"))  # Default: 90 días
-    cleanup_batch_size = int(os.getenv("CLEANUP_BATCH_SIZE", "1000"))  # Default: 1000 filas por lote
+    # Loop principal
     try:
         while not stop["flag"]:
             now = time.time()
 
+            # Escanear y cargar jobs pendientes
             if now - last_scan >= scan_every_s:
                 last_scan = now
-                try:
-                    job_ids = store.pending_jobs()
-                except Exception as e:
-                    log.warning("pending_jobs_failed", error=str(e))
-                    job_ids = []
+                job_scanner.scan_and_load()
 
-                for jid in job_ids:
-                    if jid in loaded_jobs:
-                        continue
-                    try:
-                        meta = _load_job_meta(store, jid)
-                        kind = meta["kind"]
-                        prio = meta["priority"] if meta["priority"] > 0 else 5
-                        batch = meta["batch_size"] if meta["batch_size"] > 0 else 1
-                        extra = meta["extra"]
-
-                        if kind == "fetch_followings":
-                            items = _items_from_meta_for_job(jid, meta, store=store)
-                        elif kind == "analyze_profile":
-                            items = _items_from_meta_for_job(jid, meta, store=store)
-                        else:
-                            log.info(
-                                "job_kind_not_supported",
-                                job_id=jid,
-                                kind=kind,
-                                message="Job kind no soportado por dispatcher",
-                            )
-                            loaded_jobs.add(jid)
-                            continue
-
-                        job = Job(
-                            job_id=jid,
-                            kind=kind,
-                            items=items,
-                            batch_size=batch,
-                            priority=prio,
-                            extra=extra,
-                            pending=store.list_queued_usernames(jid),
-                        )
-
-                        try:
-                            # Evitar doble expansión Job→Tasks entre 2 dispatchers:
-                            lock_name = f"scrapinsta:expand:{jid}"
-                            got_lock = store.try_advisory_lock(lock_name, timeout_s=0)
-                            if got_lock:
-                                try:
-                                    _ensure_tasks_for_job(store, jid, kind, items, extra if isinstance(extra, dict) else None)
-                                    store.mark_job_running(jid)
-                                finally:
-                                    try:
-                                        store.release_advisory_lock(lock_name)
-                                    except Exception:
-                                        pass
-                            job.pending = store.list_queued_usernames(jid)
-                            router.add_job(job)
-                            jobs_active.labels(status="running").inc()
-                            log.info(
-                                "job_loaded",
-                                job_id=jid,
-                                kind=kind,
-                                items_count=len(items),
-                            )
-                        finally:
-                            loaded_jobs.add(jid)
-
-                    except Exception as e:
-                        if "duplicado" in str(e).lower() or "duplicate" in str(e).lower():
-                            loaded_jobs.add(jid)
-                            log.warning(
-                                "job_already_loaded",
-                                job_id=jid,
-                                message="Job ya estaba en router",
-                            )
-                        else:
-                            log.error(
-                                "job_load_error",
-                                job_id=jid,
-                                error=str(e),
-                            )
-
+            # Dispatch de tareas
             router.dispatch_tick()
 
-            if now - last_lease_cleanup >= lease_cleanup_interval:
-                try:
-                    lease_cleanup_start = time.time()
-                    reclaimed = store.reclaim_expired_leases(max_reclaimed=max_reclaimed_per_run)
-                    lease_cleanup_duration = time.time() - lease_cleanup_start
-                    
-                    if reclaimed > 0:
-                        log.info(
-                            "leases_reclaimed",
-                            count=reclaimed,
-                            max_reclaimed=max_reclaimed_per_run,
-                        )
-                    
-                    lease_cleanup_reclaimed_total.inc(reclaimed)
-                    lease_cleanup_duration_seconds.observe(lease_cleanup_duration)
-                except Exception as e:
-                    log.warning("lease_cleanup_error", error=str(e))
-                last_lease_cleanup = now
+            # Limpieza de leases expirados
+            lease_cleaner.run(now)
 
-            if now - last_cleanup >= cleanup_interval:
-                try:
-                    cleanup_start = time.time()
-                    
-                    stale_start = time.time()
-                    removed = store.cleanup_stale_tasks(older_than_days=cleanup_stale_days, batch_size=cleanup_batch_size)
-                    stale_duration = time.time() - stale_start
-                    if removed:
-                        log.info(
-                            "cleanup_stale_tasks",
-                            removed_count=removed,
-                            older_than_days=cleanup_stale_days,
-                        )
-                        cleanup_operations_total.labels(operation_type="stale_tasks").inc()
-                        cleanup_rows_deleted_total.labels(operation_type="stale_tasks", table="job_tasks").inc(removed)
-                        cleanup_duration_seconds.labels(operation_type="stale_tasks").observe(stale_duration)
-                        cleanup_last_run_timestamp.labels(operation_type="stale_tasks").set(now)
-                    
-                    finished_start = time.time()
-                    removed2 = store.cleanup_finished_tasks(older_than_days=cleanup_finished_days, batch_size=cleanup_batch_size)
-                    finished_duration = time.time() - finished_start
-                    if removed2:
-                        log.info(
-                            "cleanup_finished_tasks",
-                            removed_count=removed2,
-                            older_than_days=cleanup_finished_days,
-                        )
-                        cleanup_operations_total.labels(operation_type="finished_tasks").inc()
-                        cleanup_rows_deleted_total.labels(operation_type="finished_tasks", table="job_tasks").inc(removed2)
-                        cleanup_duration_seconds.labels(operation_type="finished_tasks").observe(finished_duration)
-                        cleanup_last_run_timestamp.labels(operation_type="finished_tasks").set(now)
-                    
-                    orphaned_start = time.time()
-                    removed3 = store.cleanup_orphaned_jobs(older_than_days=7)
-                    orphaned_duration = time.time() - orphaned_start
-                    if removed3:
-                        log.info(
-                            "cleanup_orphaned_jobs",
-                            removed_count=removed3,
-                        )
-                        cleanup_operations_total.labels(operation_type="orphaned_jobs").inc()
-                        cleanup_rows_deleted_total.labels(operation_type="orphaned_jobs", table="jobs").inc(removed3)
-                        cleanup_duration_seconds.labels(operation_type="orphaned_jobs").observe(orphaned_duration)
-                        cleanup_last_run_timestamp.labels(operation_type="orphaned_jobs").set(now)
-                    
-                    cleanup_duration = time.time() - cleanup_start
-                    if removed or removed2 or removed3:
-                        log.info(
-                            "cleanup_completed",
-                            total_removed=removed + removed2 + removed3,
-                            duration_ms=round(cleanup_duration * 1000, 2),
-                        )
-                except Exception as e:
-                    log.warning("cleanup_error", error=str(e))
-                last_cleanup = now
+            # Limpieza de mantenimiento
+            maintenance_cleaner.run(now)
 
-            for rq in result_qs.values():
+            # Procesar resultados
+            result_queues = worker_manager.get_result_queues()
+            for rq in result_queues.values():
                 while True:
                     res = rq.try_get_nowait()
                     if res is None:
@@ -578,14 +477,7 @@ def run(log_level: str = "INFO", scan_every_s: float = 2.0, tick_sleep: float = 
         log.info("dispatcher_stopping")
 
     finally:
-        for ev in stop_events.values():
-            ev.set()
-        for acc, p in procs.items():
-            p.join(timeout=10)
-            if p.is_alive():
-                log.warning("worker_force_terminate", account=acc, pid=p.pid)
-                p.terminate()
-            workers_active.labels(account=acc).dec()
+        worker_manager.stop_all()
         log.info("dispatcher_stopped")
 
 

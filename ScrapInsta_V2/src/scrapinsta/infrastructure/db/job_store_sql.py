@@ -424,6 +424,21 @@ class JobStoreSQL(JobStorePort):
         finally:
             self._return(con)
 
+    def job_exists(self, job_id: str) -> bool:
+        """
+        Verifica si un job existe en la base de datos.
+        Útil para garantizar idempotencia en operaciones como creación de jobs derivados.
+        """
+        sql = "SELECT 1 FROM jobs WHERE id = %s LIMIT 1"
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (job_id,), "select", "jobs")
+                row = cur.fetchone()
+                return row is not None
+        finally:
+            self._return(con)
+
     # -----------------------
     # Recuperación
     # -----------------------

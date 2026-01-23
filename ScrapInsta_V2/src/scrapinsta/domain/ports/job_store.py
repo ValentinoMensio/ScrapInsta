@@ -116,6 +116,18 @@ class JobStorePort(Protocol):
             client_id del job o None si no existe
         """
         ...
+    
+    def job_exists(self, job_id: str) -> bool:
+        """
+        Verifica si un job existe en la base de datos.
+        
+        Args:
+            job_id: ID del job a verificar
+            
+        Returns:
+            True si el job existe, False en caso contrario
+        """
+        ...
 
     def pending_jobs(self) -> List[str]:
         """

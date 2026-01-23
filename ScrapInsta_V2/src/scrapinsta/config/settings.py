@@ -10,7 +10,8 @@ import json, os
 
 from scrapinsta.crosscutting.logging_config import get_logger
 from scrapinsta.crosscutting.secrets import get_secrets_manager, get_secret
-from scrapinsta.crosscutting.encryption import is_encrypted_password, decrypt_password
+from scrapinsta.config.secrets_loader import SecretsLoader
+from scrapinsta.crosscutting.password_decryptor import PasswordDecryptor
 
 load_dotenv()
 log = get_logger("settings")
@@ -86,27 +87,11 @@ class Settings(BaseSettings):
                 return
             
             secrets_manager = get_secrets_manager()
-            
-            # Cargar secretos de base de datos
-            db_pass_secret = secrets_manager.get_secret("db_pass")
-            if db_pass_secret:
-                self.db_pass = db_pass_secret
-                log.debug("db_pass_loaded_from_secrets_manager")
-            
-            # Cargar API key de OpenAI
-            openai_key = secrets_manager.get_secret("openai_api_key")
-            if openai_key and not self.openai_api_key:
-                self.openai_api_key = openai_key
-                log.debug("openai_api_key_loaded_from_secrets_manager")
-            
-            # Cargar contraseña de Redis
-            redis_pass = secrets_manager.get_secret("redis_password")
-            if redis_pass:
-                self.redis_password = redis_pass
-                log.debug("redis_password_loaded_from_secrets_manager")
+            loader = SecretsLoader(secrets_manager)
+            loader.load_into_settings(self)
         except Exception as e:
             # No fallar si el gestor de secretos no está disponible
-            log.debug("secrets_load_failed", error=str(e)) 
+            log.warning("secrets_load_failed", error=str(e)) 
 
     # --- Retry ---
     retry_max_retries: int = Field(default=3)
@@ -185,6 +170,9 @@ class Settings(BaseSettings):
     secrets_provider: Optional[str] = Field(default=None, env="SECRETS_PROVIDER")
     encryption_key: Optional[str] = Field(default=None, env="ENCRYPTION_KEY")
     enable_encrypted_passwords: bool = Field(default=True, env="ENABLE_ENCRYPTED_PASSWORDS")
+    
+    # Instancia de PasswordDecryptor (se inicializa después de la validación)
+    _password_decryptor: Optional[PasswordDecryptor] = None
 
     @model_validator(mode='after')
     def _load_secrets_after_init(self):
@@ -192,6 +180,10 @@ class Settings(BaseSettings):
         Carga secretos desde el gestor de secretos después de la inicialización.
         Esto permite sobreescribir valores de entorno con secretos externos.
         """
+        # Inicializar password decryptor
+        self._password_decryptor = PasswordDecryptor(enabled=self.enable_encrypted_passwords)
+        
+        # Cargar secretos desde gestor
         self._load_secrets_from_manager()
         return self
 
@@ -235,21 +227,19 @@ class Settings(BaseSettings):
         Returns:
             Contraseña descifrada o original
         """
-        if not self.enable_encrypted_passwords:
+        if self._password_decryptor is None:
+            # Fallback si no está inicializado (no debería pasar)
             return password
         
-        if is_encrypted_password(password):
-            try:
-                return decrypt_password(password)
-            except Exception as e:
-                log.error(
-                    "password_decrypt_failed",
-                    error=str(e),
-                    message="Error al descifrar contraseña, usando valor original"
-                )
-                return password
-        
-        return password
+        try:
+            return self._password_decryptor.decrypt_if_needed(password)
+        except Exception as e:
+            log.error(
+                "password_decrypt_failed",
+                error=str(e),
+                message="Error al descifrar contraseña, usando valor original"
+            )
+            return password
 
     def _load_accounts_payload(self) -> List[dict]:
         """
@@ -264,20 +254,21 @@ class Settings(BaseSettings):
         # 1) Intentar cargar desde gestor de secretos
         try:
             secrets_manager = get_secrets_manager()
-            if secrets_manager and hasattr(secrets_manager, '__class__'):
-                provider_name = secrets_manager.__class__.__name__
-                if provider_name != "EnvSecretsManager" or os.getenv("SECRETS_PROVIDER"):
-                    # Solo intentar si no es ENV o si está configurado explícitamente
-                    accounts_data = secrets_manager.get_secret("instagram_accounts")
-                    if accounts_data:
-                        try:
-                            payload = json.loads(accounts_data)
-                            normalized = self._normalize_accounts_payload(payload)
-                            if normalized:
-                                log.info("accounts_loaded_from_secrets_manager", provider=provider_name)
-                                return normalized
-                        except Exception as e:
-                            log.debug("accounts_load_from_secrets_failed", error=str(e))
+            # Usar polimorfismo en lugar de nombre de clase
+            if secrets_manager.is_external_provider or os.getenv("SECRETS_PROVIDER"):
+                accounts_data = secrets_manager.get_secret("instagram_accounts")
+                if accounts_data:
+                    try:
+                        payload = json.loads(accounts_data)
+                        normalized = self._normalize_accounts_payload(payload)
+                        if normalized:
+                            log.info(
+                                "accounts_loaded_from_secrets_manager",
+                                provider=secrets_manager.__class__.__name__
+                            )
+                            return normalized
+                    except Exception as e:
+                        log.debug("accounts_load_from_secrets_failed", error=str(e))
         except Exception as e:
             log.debug("secrets_manager_unavailable", error=str(e))
         

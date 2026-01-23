@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 from enum import Enum
 
 from scrapinsta.crosscutting.logging_config import get_logger
@@ -63,6 +63,17 @@ class SecretsManager(ABC):
             Diccionario con los secretos encontrados
         """
         pass
+    
+    @property
+    @abstractmethod
+    def is_external_provider(self) -> bool:
+        """
+        Indica si es un proveedor externo (no ENV).
+        
+        Returns:
+            True si es un proveedor externo (AWS, Vault, Azure), False si es ENV
+        """
+        pass
 
 
 class EnvSecretsManager(SecretsManager):
@@ -75,6 +86,10 @@ class EnvSecretsManager(SecretsManager):
         """
         self.env_prefix = env_prefix
         log.info("secrets_manager_initialized", provider="ENV", prefix=env_prefix)
+    
+    @property
+    def is_external_provider(self) -> bool:
+        return False
     
     def get_secret(self, key: str, default: Optional[str] = None) -> Optional[str]:
         env_key = f"{self.env_prefix}{key}" if self.env_prefix else key
@@ -132,6 +147,10 @@ class AWSSecretsManager(SecretsManager):
             region=self.region,
             prefix=prefix
         )
+    
+    @property
+    def is_external_provider(self) -> bool:
+        return True
     
     def get_secret(self, key: str, default: Optional[str] = None) -> Optional[str]:
         try:
@@ -232,6 +251,10 @@ class VaultSecretsManager(SecretsManager):
             prefix=prefix
         )
     
+    @property
+    def is_external_provider(self) -> bool:
+        return True
+    
     def get_secret(self, key: str, default: Optional[str] = None) -> Optional[str]:
         try:
             path = f"{self.prefix}{key}"
@@ -307,6 +330,10 @@ class AzureSecretsManager(SecretsManager):
             vault_url=self.vault_url
         )
     
+    @property
+    def is_external_provider(self) -> bool:
+        return True
+    
     def get_secret(self, key: str, default: Optional[str] = None) -> Optional[str]:
         try:
             secret = self._client.get_secret(key)
@@ -329,6 +356,105 @@ class AzureSecretsManager(SecretsManager):
             log.error("secrets_list_error", prefix=prefix, provider="AZURE", error=str(e))
         
         return result
+
+
+class SecretsManagerRegistry:
+    """Registry para proveedores de secretos usando el patrón Registry."""
+    
+    _providers: Dict[SecretProvider, Callable[..., SecretsManager]] = {}
+    
+    @classmethod
+    def register(
+        cls,
+        provider: SecretProvider,
+        factory: Callable[..., SecretsManager]
+    ) -> None:
+        """
+        Registra un proveedor de secretos.
+        
+        Args:
+            provider: Tipo de proveedor
+            factory: Función factory que crea el gestor
+        """
+        cls._providers[provider] = factory
+        log.debug("secrets_provider_registered", provider=provider.value)
+    
+    @classmethod
+    def create(
+        cls,
+        provider: SecretProvider,
+        **kwargs
+    ) -> SecretsManager:
+        """
+        Crea un gestor usando el proveedor registrado.
+        
+        Args:
+            provider: Tipo de proveedor
+            **kwargs: Argumentos para el factory
+            
+        Returns:
+            Instancia del gestor de secretos
+            
+        Raises:
+            ValueError: Si el proveedor no está registrado
+        """
+        factory = cls._providers.get(provider)
+        if not factory:
+            raise ValueError(f"Proveedor no registrado: {provider}")
+        return factory(**kwargs)
+    
+    @classmethod
+    def is_registered(cls, provider: SecretProvider) -> bool:
+        """Verifica si un proveedor está registrado."""
+        return provider in cls._providers
+
+
+def _create_env_manager(environment: Optional[str] = None, **kwargs) -> EnvSecretsManager:
+    """Factory para EnvSecretsManager."""
+    env_prefix = kwargs.get("env_prefix", os.getenv("SECRETS_ENV_PREFIX", ""))
+    return EnvSecretsManager(env_prefix=env_prefix)
+
+
+def _create_aws_manager(environment: Optional[str] = None, **kwargs) -> AWSSecretsManager:
+    """Factory para AWSSecretsManager."""
+    region = kwargs.get("region") or os.getenv("AWS_REGION")
+    use_parameter_store = kwargs.get(
+        "use_parameter_store",
+        os.getenv("AWS_USE_PARAMETER_STORE", "false").lower() == "true"
+    )
+    prefix = kwargs.get("prefix") or f"/scrapinsta/{environment or 'local'}/"
+    return AWSSecretsManager(
+        region=region,
+        use_parameter_store=use_parameter_store,
+        prefix=prefix
+    )
+
+
+def _create_vault_manager(environment: Optional[str] = None, **kwargs) -> VaultSecretsManager:
+    """Factory para VaultSecretsManager."""
+    url = kwargs.get("url") or os.getenv("VAULT_ADDR")
+    token = kwargs.get("token") or os.getenv("VAULT_TOKEN")
+    mount_point = kwargs.get("mount_point", "secret")
+    prefix = kwargs.get("prefix") or f"scrapinsta/{environment or 'local'}/"
+    return VaultSecretsManager(
+        url=url,
+        token=token,
+        mount_point=mount_point,
+        prefix=prefix
+    )
+
+
+def _create_azure_manager(environment: Optional[str] = None, **kwargs) -> AzureSecretsManager:
+    """Factory para AzureSecretsManager."""
+    vault_url = kwargs.get("vault_url") or os.getenv("AZURE_VAULT_URL")
+    return AzureSecretsManager(vault_url=vault_url)
+
+
+# Registrar proveedores por defecto
+SecretsManagerRegistry.register(SecretProvider.ENV, _create_env_manager)
+SecretsManagerRegistry.register(SecretProvider.AWS, _create_aws_manager)
+SecretsManagerRegistry.register(SecretProvider.VAULT, _create_vault_manager)
+SecretsManagerRegistry.register(SecretProvider.AZURE, _create_azure_manager)
 
 
 def create_secrets_manager(
@@ -366,47 +492,67 @@ def create_secrets_manager(
         )
         provider_enum = SecretProvider.ENV
     
-    # Crear instancia según proveedor
-    if provider_enum == SecretProvider.ENV:
-        env_prefix = kwargs.get("env_prefix", os.getenv("SECRETS_ENV_PREFIX", ""))
-        return EnvSecretsManager(env_prefix=env_prefix)
-    
-    elif provider_enum == SecretProvider.AWS:
-        region = kwargs.get("region") or os.getenv("AWS_REGION")
-        use_parameter_store = kwargs.get(
-            "use_parameter_store",
-            os.getenv("AWS_USE_PARAMETER_STORE", "false").lower() == "true"
+    # Crear usando registry
+    try:
+        return SecretsManagerRegistry.create(
+            provider_enum,
+            environment=environment,
+            **kwargs
         )
-        prefix = kwargs.get("prefix") or f"/scrapinsta/{environment}/"
-        return AWSSecretsManager(
-            region=region,
-            use_parameter_store=use_parameter_store,
-            prefix=prefix
-        )
-    
-    elif provider_enum == SecretProvider.VAULT:
-        url = kwargs.get("url") or os.getenv("VAULT_ADDR")
-        token = kwargs.get("token") or os.getenv("VAULT_TOKEN")
-        mount_point = kwargs.get("mount_point", "secret")
-        prefix = kwargs.get("prefix") or f"scrapinsta/{environment}/"
-        return VaultSecretsManager(
-            url=url,
-            token=token,
-            mount_point=mount_point,
-            prefix=prefix
-        )
-    
-    elif provider_enum == SecretProvider.AZURE:
-        vault_url = kwargs.get("vault_url") or os.getenv("AZURE_VAULT_URL")
-        return AzureSecretsManager(vault_url=vault_url)
-    
-    else:
-        # Fallback a ENV
+    except ValueError:
+        # Fallback a ENV si el proveedor no está registrado
+        log.warning("provider_not_registered_fallback", provider=provider_enum.value)
         return EnvSecretsManager()
 
 
-# Singleton global del gestor de secretos
-_secrets_manager: Optional[SecretsManager] = None
+class SecretsManagerFactory:
+    """
+    Factory para crear y gestionar instancias de SecretsManager.
+    Permite dependency injection mientras mantiene compatibilidad con singleton.
+    """
+    
+    def __init__(self, provider: Optional[str] = None, **kwargs):
+        """
+        Args:
+            provider: Proveedor a usar (env/aws/vault/azure)
+            **kwargs: Argumentos adicionales para el proveedor
+        """
+        self._provider = provider
+        self._kwargs = kwargs
+        self._instance: Optional[SecretsManager] = None
+    
+    def get_manager(self) -> SecretsManager:
+        """
+        Obtiene el gestor de secretos (lazy initialization).
+        
+        Returns:
+            Instancia del gestor de secretos
+        """
+        if self._instance is None:
+            self._instance = create_secrets_manager(
+                provider=self._provider,
+                **self._kwargs
+            )
+        return self._instance
+    
+    def reset(self) -> None:
+        """
+        Resetea la instancia (útil para testing).
+        """
+        self._instance = None
+    
+    def set_manager(self, manager: SecretsManager) -> None:
+        """
+        Establece un gestor específico (útil para testing con mocks).
+        
+        Args:
+            manager: Instancia del gestor a usar
+        """
+        self._instance = manager
+
+
+# Factory por defecto (singleton para compatibilidad)
+_default_factory = SecretsManagerFactory()
 
 
 def get_secrets_manager() -> SecretsManager:
@@ -417,10 +563,7 @@ def get_secrets_manager() -> SecretsManager:
     Returns:
         Instancia del gestor de secretos
     """
-    global _secrets_manager
-    if _secrets_manager is None:
-        _secrets_manager = create_secrets_manager()
-    return _secrets_manager
+    return _default_factory.get_manager()
 
 
 def get_secret(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -442,6 +585,5 @@ def reset_secrets_manager() -> None:
     """
     Resetea el gestor de secretos global (útil para tests).
     """
-    global _secrets_manager
-    _secrets_manager = None
+    _default_factory.reset()
 
