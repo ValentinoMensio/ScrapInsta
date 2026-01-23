@@ -5,7 +5,23 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", os.getenv("API_SHARED_SECRET", "change-me-in-production"))
+# Cargar SECRET_KEY desde gestor de secretos si está configurado
+_secret_key = os.getenv("JWT_SECRET_KEY") or os.getenv("API_SHARED_SECRET")
+try:
+    from scrapinsta.crosscutting.secrets import get_secret
+    jwt_secret = get_secret("jwt_secret_key")
+    if jwt_secret:
+        _secret_key = jwt_secret
+    else:
+        # Fallback a api_shared_secret
+        api_secret = get_secret("api_shared_secret")
+        if api_secret:
+            _secret_key = api_secret
+except Exception:
+    # Si el gestor de secretos no está disponible, usar variable de entorno
+    pass
+
+SECRET_KEY = _secret_key or "change-me-in-production"
 ALGORITHM = "HS256"
 
 # Configurable via env (documentado en MEJORAS_PROFESIONALES.md)

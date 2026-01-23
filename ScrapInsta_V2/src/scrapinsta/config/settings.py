@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from dotenv import load_dotenv
 from typing import Optional, List, Dict, Any
 from urllib.parse import urlparse, quote_plus
 import json, os
 
 from scrapinsta.crosscutting.logging_config import get_logger
+from scrapinsta.crosscutting.secrets import get_secrets_manager, get_secret
+from scrapinsta.crosscutting.encryption import is_encrypted_password, decrypt_password
 
 load_dotenv()
 log = get_logger("settings")
@@ -71,7 +73,40 @@ class Settings(BaseSettings):
     db_port: int = Field(default=3307, env=["DB_PORT"]) 
     db_user: str = Field(default="app", env=["DB_USER"]) 
     db_pass: str = Field(default="app_password", env=["DB_PASS"]) 
-    db_name: str = Field(default="scrapinsta", env=["DB_NAME"]) 
+    db_name: str = Field(default="scrapinsta", env=["DB_NAME"])
+    
+    def _load_secrets_from_manager(self) -> None:
+        """
+        Carga secretos desde el gestor de secretos si está configurado.
+        Esto permite sobreescribir valores de entorno con secretos externos.
+        """
+        try:
+            # Solo intentar si SECRETS_PROVIDER está configurado
+            if not os.getenv("SECRETS_PROVIDER"):
+                return
+            
+            secrets_manager = get_secrets_manager()
+            
+            # Cargar secretos de base de datos
+            db_pass_secret = secrets_manager.get_secret("db_pass")
+            if db_pass_secret:
+                self.db_pass = db_pass_secret
+                log.debug("db_pass_loaded_from_secrets_manager")
+            
+            # Cargar API key de OpenAI
+            openai_key = secrets_manager.get_secret("openai_api_key")
+            if openai_key and not self.openai_api_key:
+                self.openai_api_key = openai_key
+                log.debug("openai_api_key_loaded_from_secrets_manager")
+            
+            # Cargar contraseña de Redis
+            redis_pass = secrets_manager.get_secret("redis_password")
+            if redis_pass:
+                self.redis_password = redis_pass
+                log.debug("redis_password_loaded_from_secrets_manager")
+        except Exception as e:
+            # No fallar si el gestor de secretos no está disponible
+            log.debug("secrets_load_failed", error=str(e)) 
 
     # --- Retry ---
     retry_max_retries: int = Field(default=3)
@@ -145,6 +180,20 @@ class Settings(BaseSettings):
     # --- Redis Cache TTLs ---
     redis_cache_profile_ttl: int = Field(default=3600, env="REDIS_CACHE_PROFILE_TTL")  # 1 hora
     redis_cache_analysis_ttl: int = Field(default=3600, env="REDIS_CACHE_ANALYSIS_TTL")  # 1 hora
+    
+    # --- Secrets Management ---
+    secrets_provider: Optional[str] = Field(default=None, env="SECRETS_PROVIDER")
+    encryption_key: Optional[str] = Field(default=None, env="ENCRYPTION_KEY")
+    enable_encrypted_passwords: bool = Field(default=True, env="ENABLE_ENCRYPTED_PASSWORDS")
+
+    @model_validator(mode='after')
+    def _load_secrets_after_init(self):
+        """
+        Carga secretos desde el gestor de secretos después de la inicialización.
+        Esto permite sobreescribir valores de entorno con secretos externos.
+        """
+        self._load_secrets_from_manager()
+        return self
 
     # ---------- Helpers de cuentas ----------
     def _read_json_from_path(self, path_str: Optional[str]) -> Optional[Any]:
@@ -175,24 +224,83 @@ class Settings(BaseSettings):
         if isinstance(payload, dict):
             return [{"username": str(k), "password": str(v)} for k, v in payload.items()]
         return []
+    
+    def _decrypt_password_if_needed(self, password: str) -> str:
+        """
+        Descifra una contraseña si está cifrada.
+        
+        Args:
+            password: Contraseña (puede estar cifrada o no)
+            
+        Returns:
+            Contraseña descifrada o original
+        """
+        if not self.enable_encrypted_passwords:
+            return password
+        
+        if is_encrypted_password(password):
+            try:
+                return decrypt_password(password)
+            except Exception as e:
+                log.error(
+                    "password_decrypt_failed",
+                    error=str(e),
+                    message="Error al descifrar contraseña, usando valor original"
+                )
+                return password
+        
+        return password
 
     def _load_accounts_payload(self) -> List[dict]:
-        # 1) Archivo explícito
+        """
+        Carga las cuentas de Instagram desde múltiples fuentes.
+        Prioridad:
+        1. Gestor de secretos (si está configurado)
+        2. Archivo explícito (INSTAGRAM_ACCOUNTS_PATH)
+        3. Variable de entorno JSON (INSTAGRAM_ACCOUNTS_JSON)
+        4. Archivo de secretos Docker (SECRET_ACCOUNTS_PATH)
+        5. Atributo en Settings (tests)
+        """
+        # 1) Intentar cargar desde gestor de secretos
+        try:
+            secrets_manager = get_secrets_manager()
+            if secrets_manager and hasattr(secrets_manager, '__class__'):
+                provider_name = secrets_manager.__class__.__name__
+                if provider_name != "EnvSecretsManager" or os.getenv("SECRETS_PROVIDER"):
+                    # Solo intentar si no es ENV o si está configurado explícitamente
+                    accounts_data = secrets_manager.get_secret("instagram_accounts")
+                    if accounts_data:
+                        try:
+                            payload = json.loads(accounts_data)
+                            normalized = self._normalize_accounts_payload(payload)
+                            if normalized:
+                                log.info("accounts_loaded_from_secrets_manager", provider=provider_name)
+                                return normalized
+                        except Exception as e:
+                            log.debug("accounts_load_from_secrets_failed", error=str(e))
+        except Exception as e:
+            log.debug("secrets_manager_unavailable", error=str(e))
+        
+        # 2) Archivo explícito
         payload = self._read_json_from_path(os.getenv("INSTAGRAM_ACCOUNTS_PATH"))
         if payload is not None:
             return self._normalize_accounts_payload(payload)
-        # 2) ENV JSON
+        
+        # 3) ENV JSON
         payload = self._read_json_from_env("INSTAGRAM_ACCOUNTS_JSON")
         if payload is not None:
             return self._normalize_accounts_payload(payload)
-        # 3) Secret por archivo (Docker)
+        
+        # 4) Secret por archivo (Docker)
         path = self.secret_accounts_path or os.getenv("SECRET_ACCOUNTS_PATH")
         payload = self._read_json_from_path(path)
         if payload is not None:
             return self._normalize_accounts_payload(payload)
-        # 4) Fallback: atributo en Settings (tests)
+        
+        # 5) Fallback: atributo en Settings (tests)
         if self.accounts:
             return self._normalize_accounts_payload(self.accounts)
+        
         return []
 
     def _build_accounts(self) -> List[AccountConfig]:
@@ -203,6 +311,9 @@ class Settings(BaseSettings):
         errors: List[str] = []
         for i, item in enumerate(raw_list, start=1):
             try:
+                # Descifrar contraseña si está cifrada
+                if "password" in item:
+                    item["password"] = self._decrypt_password_if_needed(item["password"])
                 valid.append(AccountConfig(**item))
             except Exception as e:
                 errors.append(f"item #{i}: {e}")

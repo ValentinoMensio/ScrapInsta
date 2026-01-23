@@ -314,7 +314,16 @@ async def general_exception_handler(request: Request, exc: Exception):
     
     return await scrapinsta_http_exception_handler(request, http_exc)
 
+# Cargar API_SHARED_SECRET desde gestor de secretos si está configurado
 API_SHARED_SECRET = os.getenv("API_SHARED_SECRET")
+try:
+    from scrapinsta.crosscutting.secrets import get_secret
+    secret = get_secret("api_shared_secret")
+    if secret:
+        API_SHARED_SECRET = secret
+except Exception:
+    # Si el gestor de secretos no está disponible, usar variable de entorno
+    pass
 
 # Clientes con scopes y rate limit (opcional, JSON en env API_CLIENTS_JSON)
 _CLIENTS: Dict[str, Dict[str, Any]] = {}
