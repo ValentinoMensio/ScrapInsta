@@ -19,6 +19,21 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    container_name: docker-redis-1
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   app:
     build:
       context: ..
@@ -46,6 +61,7 @@ services:
 volumes:
   mysql_data:
   profiles_cache:
+  redis_data:
 
 secrets:
   instagram_accounts:

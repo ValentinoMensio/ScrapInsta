@@ -4,6 +4,10 @@ from datetime import datetime, timedelta
 from typing import Callable, TypeVar, Sequence, Optional, Tuple
 
 from scrapinsta.application.dto.profiles import AnalyzeProfileRequest, AnalyzeProfileResponse
+from scrapinsta.application.dto.cache_serialization import (
+    serialize_analyze_profile_response,
+    deserialize_analyze_profile_response,
+)
 from scrapinsta.crosscutting.logging_config import get_logger
 
 from scrapinsta.domain.models.profile_models import (
@@ -95,19 +99,43 @@ class AnalyzeProfileUseCase:
             if cached_analysis:
                 log.info("analyze_profile_cache_hit", username=username)
                 try:
-                    # Reconstruir respuesta desde caché
-                    # Nota: Esto requiere serialización/deserialización completa de los modelos
-                    # Por ahora, si hay caché, retornamos que se saltó
-                    # TODO: Implementar serialización completa de AnalyzeProfileResponse
-                    return AnalyzeProfileResponse(
-                        snapshot=None,
-                        recent_reels=[],
-                        recent_posts=[],
-                        basic_stats=None,
-                        skipped_recent=True
-                    )
+                    # Deserializar respuesta completa desde caché
+                    response = deserialize_analyze_profile_response(cached_analysis)
+                    log.debug("analyze_profile_cache_deserialized", username=username)
+                    
+                    # IMPORTANTE: También guardar en BD cuando hay cache hit
+                    # Esto asegura que el historial en BD esté completo, incluso si
+                    # el perfil solo se consulta desde caché (sin hacer scraping)
+                    if self.profile_repo and response.snapshot:
+                        try:
+                            pid = self.profile_repo.upsert_profile(response.snapshot)
+                            self.profile_repo.save_analysis_snapshot(
+                                pid,
+                                response.snapshot,
+                                response.basic_stats,
+                                response.recent_reels or [],
+                                response.recent_posts or [],
+                            )
+                            log.debug("analyze_profile_db_saved_from_cache", username=username)
+                        except Exception as e:
+                            # No crítico: el cache hit ya retornó los datos
+                            # Solo logueamos el error pero no fallamos la respuesta
+                            log.warning(
+                                "analyze_profile_db_save_from_cache_failed",
+                                username=username,
+                                error=str(e),
+                                message="Cache hit exitoso, pero falló guardado en BD (no crítico)",
+                            )
+                    
+                    return response
                 except Exception as e:
-                    log.warning("analyze_profile_cache_deserialize_failed", username=username, error=str(e))
+                    log.warning(
+                        "analyze_profile_cache_deserialize_failed",
+                        username=username,
+                        error=str(e),
+                        message="Continuando con análisis completo",
+                    )
+                    # Si falla la deserialización, continuar con análisis normal
 
         if self.profile_repo:
             last_analysis = self.profile_repo.get_last_analysis_date(username)
@@ -178,20 +206,19 @@ class AnalyzeProfileUseCase:
             basic_stats=basic,
         )
 
-        # Guardar en caché
+        # Guardar en caché usando serialización completa
         if self.cache_service:
             try:
-                cache_data = {
-                    "username": username,
-                    "snapshot": snapshot.model_dump() if hasattr(snapshot, "model_dump") else snapshot.__dict__,
-                    "basic_stats": basic.model_dump() if basic and hasattr(basic, "model_dump") else (basic.__dict__ if basic else None),
-                    "recent_reels": [r.model_dump() if hasattr(r, "model_dump") else r.__dict__ for r in recent_reels] if recent_reels else [],
-                    "recent_posts": [p.model_dump() if hasattr(p, "model_dump") else p.__dict__ for p in recent_posts] if recent_posts else [],
-                }
+                cache_data = serialize_analyze_profile_response(resp)
                 self.cache_service.set_profile_analysis(username, cache_data)
                 log.debug("analyze_profile_cache_saved", username=username)
             except Exception as e:
-                log.warning("analyze_profile_cache_save_failed", username=username, error=str(e))
+                log.warning(
+                    "analyze_profile_cache_save_failed",
+                    username=username,
+                    error=str(e),
+                    message="No crítico: análisis completado exitosamente",
+                )
 
         if self.profile_repo:
             try:

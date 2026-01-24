@@ -86,11 +86,11 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-# 2. Levantar base de datos
+# 2. Levantar base de datos y Redis
 echo ""
-echo "2️⃣ Iniciando base de datos..."
+echo "2️⃣ Iniciando base de datos y Redis..."
 cd docker
-docker compose up -d db
+docker compose up -d db redis
 
 # Esperar a que MySQL esté listo
 echo "   Esperando a que MySQL esté listo..."
@@ -117,6 +117,19 @@ if ! docker compose exec -T db mysql -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e "S
 else
     info "Base de datos ya tiene datos"
 fi
+
+# Esperar a que Redis esté listo
+echo "   Esperando a que Redis esté listo..."
+for i in {1..15}; do
+    if docker compose exec -T redis redis-cli ping >/dev/null 2>&1; then
+        success "Redis está listo"
+        break
+    fi
+    if [ $i -eq 15 ]; then
+        warn "Redis no respondió, pero continuando (el caché estará deshabilitado)"
+    fi
+    sleep 1
+done
 
 cd ..
 

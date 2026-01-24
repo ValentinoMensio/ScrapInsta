@@ -295,6 +295,8 @@ class FetchToAnalyzeOrchestrator:
             items = self._db_followings_for_owner(owner, limit=limit_req)
             log.info("fetch_to_analyze_db_fallback", items=len(items), limit_req=limit_req)
 
+        # Cargar metadata una sola vez y reutilizarla
+        meta = None
         try:
             meta = _load_job_meta(self._store, corr)
             client_acc = None
@@ -314,14 +316,27 @@ class FetchToAnalyzeOrchestrator:
             return
 
         # analyze_job_id ya fue definido arriba para verificar idempotencia
+        # Obtener client_id: primero desde la tabla, luego desde metadata extra como fallback
         client_id = self._store.get_job_client_id(corr)
         if not client_id:
-            log.error(
-                "job_missing_client_id",
-                job_id=corr,
-                message="Job no tiene client_id asignado. Esto no debería ocurrir."
-            )
-            raise ValueError(f"Job {corr} no tiene client_id asignado. Esto indica un error de datos.")
+            # Fallback: intentar obtener client_id desde metadata extra
+            # (para compatibilidad con jobs antiguos que pueden no tener client_id en la tabla)
+            if meta and isinstance(meta.get("extra"), dict):
+                client_id = (meta["extra"] or {}).get("client_id")
+            
+            if not client_id:
+                log.warning(
+                    "job_missing_client_id",
+                    job_id=corr,
+                    analyze_job_id=analyze_job_id,
+                    message="Job no tiene client_id asignado. Saltando creación de job de análisis. "
+                            "Esto puede ocurrir con jobs antiguos creados antes de implementar multi-tenancy. "
+                            "El dispatcher continuará funcionando normalmente."
+                )
+                # No lanzar excepción: simplemente saltar la creación del job de análisis
+                # El dispatcher debe continuar funcionando normalmente
+                return
+        
         try:
             self._store.create_job(
                 job_id=analyze_job_id,
@@ -347,7 +362,7 @@ class FetchToAnalyzeOrchestrator:
             self._router.add_job(analyze_job)
             log.info("fetch_to_analyze_created_analyze_job", analyze_job_id=analyze_job_id, items=len(items), fetch_job_id=corr)
         except Exception as e:
-            log.warning("fetch_to_analyze_create_failed", fetch_job_id=corr, error=str(e))
+            log.warning("fetch_to_analyze_create_failed", fetch_job_id=corr, analyze_job_id=analyze_job_id, error=str(e))
             # No agregamos a _created_once porque ya no existe
             # La idempotencia se garantiza consultando BD en la próxima ejecución
 
