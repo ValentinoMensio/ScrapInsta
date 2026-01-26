@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import pymysql
 from typing import Optional, Dict, Any
-from passlib.context import CryptContext
+import bcrypt
 
 from scrapinsta.domain.ports.client_repo import ClientRepo
 from scrapinsta.infrastructure.db.connection_provider import _normalize_params
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 class ClientRepoSQL(ClientRepo):
@@ -52,12 +50,21 @@ class ClientRepoSQL(ClientRepo):
         """
         con = self._connect()
         try:
+            # Convertir API key a bytes para verificación con bcrypt
+            api_key_bytes = api_key.encode('utf-8')
+            
             with con.cursor() as cur:
                 cur.execute(sql)
                 rows = cur.fetchall()
                 for row in rows:
-                    if pwd_context.verify(api_key, row['api_key_hash']):
-                        return dict(row)
+                    # Usar bcrypt directamente para evitar problemas de compatibilidad con passlib
+                    try:
+                        stored_hash = row['api_key_hash'].encode('utf-8') if isinstance(row['api_key_hash'], str) else row['api_key_hash']
+                        if bcrypt.checkpw(api_key_bytes, stored_hash):
+                            return dict(row)
+                    except (ValueError, TypeError) as e:
+                        # Si hay error en la verificación (hash inválido, etc.), continuar con el siguiente
+                        continue
                 return None
         finally:
             con.close()

@@ -114,6 +114,7 @@ def enqueue_followings(
                 "source": "ext",
                 "client_account": client_account,
                 "target_username": target,
+                "client_id": client_id,  # Guardar client_id en extra para fallback en dispatcher
             },
             total_items=1,
             client_id=client_id,

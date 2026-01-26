@@ -298,10 +298,19 @@ class FetchToAnalyzeOrchestrator:
         # Obtener client_id: primero desde la tabla, luego desde metadata extra como fallback
         client_id = self._store.get_job_client_id(corr)
         if not client_id:
-            # Fallback: intentar obtener client_id desde metadata extra
+            # Fallback 1: intentar obtener client_id desde metadata extra
             # (para compatibilidad con jobs antiguos que pueden no tener client_id en la tabla)
             if meta and isinstance(meta.get("extra"), dict):
                 client_id = (meta["extra"] or {}).get("client_id")
+            
+            # Fallback 2: intentar obtener desde el job directamente si meta no está disponible
+            if not client_id:
+                try:
+                    job_meta = _load_job_meta(self._store, corr)
+                    if job_meta and isinstance(job_meta.get("extra"), dict):
+                        client_id = (job_meta["extra"] or {}).get("client_id")
+                except Exception:
+                    pass
             
             if not client_id:
                 log.warning(

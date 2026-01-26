@@ -53,18 +53,37 @@
     <label>API Base URL</label>
     <input id="api_base" placeholder="https://api.tu-dominio.com" />
 
-    <div class="grid">
-      <div>
-        <label>Auth mode</label>
-        <select id="auth_mode">
-          <option value="x-api-key">X-Api-Key</option>
-          <option value="bearer">Authorization: Bearer</option>
-        </select>
+    <label>
+      <input type="checkbox" id="use_jwt" style="width: auto; margin-right: 8px;" />
+      Usar autenticación JWT (recomendado)
+    </label>
+    <small>Si está activado, el sistema obtendrá automáticamente un token JWT usando tu API key.</small>
+
+    <div id="auth_mode_group">
+      <div class="grid">
+        <div>
+          <label>Auth mode</label>
+          <select id="auth_mode">
+            <option value="x-api-key">X-Api-Key</option>
+            <option value="bearer">Authorization: Bearer</option>
+          </select>
+        </div>
+        <div>
+          <label>Token / API Key</label>
+          <input id="api_token" placeholder="tu_token_secreto" />
+        </div>
       </div>
-      <div>
-        <label>Token</label>
-        <input id="api_token" placeholder="tu_token_secreto" />
-      </div>
+    </div>
+
+    <div id="jwt_info" style="display: none;">
+      <label>API Key (para obtener JWT)</label>
+      <input id="api_token_jwt" placeholder="tu_api_key" />
+      <small>Esta API key se usará para obtener el token JWT automáticamente.</small>
+      
+      <label style="margin-top: 12px;">Client ID (se obtiene automáticamente al hacer login)</label>
+      <input id="client_id" placeholder="Se llenará automáticamente" readonly />
+      <button id="test_login" type="button" style="margin-top: 8px;">Probar Login JWT</button>
+      <input id="login_result" readonly placeholder="Resultado del login…" style="margin-top: 8px;" />
     </div>
 
     <label>Tu cuenta Instagram (X-Account)</label>

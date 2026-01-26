@@ -3,11 +3,9 @@ Tests para ClientRepoSQL con conexión y cursor mockeados.
 """
 import pytest
 from unittest.mock import Mock, MagicMock, patch
-from passlib.context import CryptContext
+import bcrypt
 
 from scrapinsta.infrastructure.db.client_repo_sql import ClientRepoSQL
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 @pytest.fixture
@@ -81,7 +79,8 @@ class TestClientRepoSQL:
     def test_get_by_api_key_valid(self, client_repo, mock_cursor):
         """Obtener cliente por API key válida."""
         api_key = "testkey123"
-        hashed = "$2b$12$testhash1234567890123456789012345678901234567890123456789012"
+        # Generar un hash bcrypt real para el test
+        hashed = bcrypt.hashpw(api_key.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         
         mock_cursor.fetchall.return_value = [
             {
@@ -93,17 +92,25 @@ class TestClientRepoSQL:
             }
         ]
         
-        with patch("scrapinsta.infrastructure.db.client_repo_sql.pwd_context.verify") as mock_verify:
-            mock_verify.return_value = True
+        with patch("scrapinsta.infrastructure.db.client_repo_sql.bcrypt.checkpw") as mock_checkpw:
+            mock_checkpw.return_value = True
             result = client_repo.get_by_api_key(api_key)
         
         assert result is not None
         assert result["id"] == "client1"
-        mock_verify.assert_called_once_with(api_key, hashed)
+        # Verificar que se llamó con los argumentos correctos
+        mock_checkpw.assert_called_once()
+        call_args = mock_checkpw.call_args[0]
+        assert call_args[0] == api_key.encode('utf-8')
+        assert call_args[1] == hashed.encode('utf-8')
     
     def test_get_by_api_key_invalid(self, client_repo, mock_cursor):
         """Obtener cliente con API key inválida."""
-        hashed = "$2b$12$testhash1234567890123456789012345678901234567890123456789012"
+        api_key = "testkey123"
+        wrong_key = "wrong-key"
+        # Generar un hash bcrypt real para el test
+        hashed = bcrypt.hashpw(api_key.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        
         mock_cursor.fetchall.return_value = [
             {
                 "id": "client1",
@@ -112,12 +119,16 @@ class TestClientRepoSQL:
             }
         ]
         
-        with patch("scrapinsta.infrastructure.db.client_repo_sql.pwd_context.verify") as mock_verify:
-            mock_verify.return_value = False
-            result = client_repo.get_by_api_key("wrong-key")
+        with patch("scrapinsta.infrastructure.db.client_repo_sql.bcrypt.checkpw") as mock_checkpw:
+            mock_checkpw.return_value = False
+            result = client_repo.get_by_api_key(wrong_key)
         
         assert result is None
-        mock_verify.assert_called_once_with("wrong-key", hashed)
+        # Verificar que se llamó con los argumentos correctos
+        mock_checkpw.assert_called_once()
+        call_args = mock_checkpw.call_args[0]
+        assert call_args[0] == wrong_key.encode('utf-8')
+        assert call_args[1] == hashed.encode('utf-8')
     
     def test_get_by_api_key_no_active_clients(self, client_repo, mock_cursor):
         """No retorna clientes inactivos."""

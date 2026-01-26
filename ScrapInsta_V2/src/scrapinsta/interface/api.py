@@ -139,10 +139,11 @@ async def general_exception_handler(request: Request, exc: Exception):
     Usa ExceptionMapper con registry pattern para mapear excepciones de dominio
     a excepciones HTTP de forma centralizada y extensible.
     """
-    from scrapinsta.crosscutting.exception_mapping import map_exception_to_http_error
+    from scrapinsta.crosscutting.exception_mapping import get_exception_mapper
     
     # Usar el mapper para convertir la excepción
-    http_exc = map_exception_to_http_error(exc)
+    mapper = get_exception_mapper()
+    http_exc = mapper.map(exc)
     
     # Logging estructurado
     logger.exception(
