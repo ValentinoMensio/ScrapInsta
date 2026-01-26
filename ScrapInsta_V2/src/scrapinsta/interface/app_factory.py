@@ -71,9 +71,34 @@ def create_app(
     app.add_middleware(ObservabilityMiddleware)
     app.add_middleware(SecurityMiddleware)
     
-    # Configurar CORS (importar función desde api)
-    from scrapinsta.interface.api import _setup_app
-    _setup_app(app, dependencies)
+    # Configurar CORS
+    cors_origins = os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else []
+    if cors_origins:
+        from fastapi.middleware.cors import CORSMiddleware
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[origin.strip() for origin in cors_origins if origin.strip()],
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-ID", "X-Trace-ID"],
+            max_age=3600,
+        )
+        logger.info("cors_enabled", origins=cors_origins)
+    else:
+        logger.info("cors_disabled", message="CORS deshabilitado (ningún origen permitido)")
+    
+    # Configurar exception handlers
+    from scrapinsta.crosscutting.exceptions import ScrapInstaHTTPError
+    from fastapi import HTTPException
+    from scrapinsta.interface.api import (
+        scrapinsta_http_exception_handler,
+        fastapi_http_exception_handler,
+        general_exception_handler,
+    )
+    app.add_exception_handler(ScrapInstaHTTPError, scrapinsta_http_exception_handler)
+    app.add_exception_handler(HTTPException, fastapi_http_exception_handler)
+    app.add_exception_handler(Exception, general_exception_handler)
     
     # Registrar routers
     from scrapinsta.interface.routers import (

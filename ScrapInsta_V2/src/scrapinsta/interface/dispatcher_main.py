@@ -76,19 +76,11 @@ def _start_worker_process(
 
 
 def _load_job_meta(store: JobStoreSQL, job_id: str) -> Dict[str, Any]:
-    sql = "SELECT kind, priority, batch_size, extra_json FROM jobs WHERE id=%s LIMIT 1"
-    with store._connect() as con:
-        with con.cursor() as cur:
-            cur.execute(sql, (job_id,))
-            row = cur.fetchone()
-            if not row:
-                raise RuntimeError(f"job {job_id!r} no existe")
-            return {
-                "kind": row["kind"],
-                "priority": int(row["priority"]),
-                "batch_size": int(row["batch_size"]),
-                "extra": json.loads(row["extra_json"]) if row.get("extra_json") else None,
-            }
+    """
+    Carga metadatos de un job usando el método público del port.
+    Evita acoplamiento a métodos privados del repositorio.
+    """
+    return store.get_job_metadata(job_id)
 
 def _items_from_meta_for_job(job_id: str, meta: Dict[str, Any], *, store: JobStoreSQL) -> List[str]:
     """
@@ -103,6 +95,8 @@ def _items_from_meta_for_job(job_id: str, meta: Dict[str, Any], *, store: JobSto
         if target:
             return [target]
         # Compatibilidad hacia atrás: seed task persistida
+        # Nota: Esto requiere acceso directo a job_tasks, pero es solo para compatibilidad
+        # con jobs antiguos. En el futuro, todos los jobs deberían tener target_username en extra_json.
         sql = """
             SELECT username
             FROM job_tasks
@@ -110,7 +104,10 @@ def _items_from_meta_for_job(job_id: str, meta: Dict[str, Any], *, store: JobSto
             ORDER BY created_at ASC
             LIMIT 1
         """
-        with store._connect() as con:
+        # TODO: Agregar método público get_seed_username() al JobStorePort si se necesita
+        # Por ahora, mantenemos este acceso directo solo para compatibilidad con jobs antiguos
+        con = store._connect()
+        try:
             with con.cursor() as cur:
                 cur.execute(sql, (job_id,))
                 row = cur.fetchone()
@@ -118,6 +115,8 @@ def _items_from_meta_for_job(job_id: str, meta: Dict[str, Any], *, store: JobSto
                     v = str(row["username"]).strip().lower()
                     if v:
                         return [v]
+        finally:
+            store._return(con)
         raise RuntimeError(f"no se encontró target_username para job {job_id}")
 
     if kind == "analyze_profile":
@@ -208,33 +207,13 @@ class FetchToAnalyzeOrchestrator:
         return None
 
     def _db_followings_for_owner(self, owner: str, limit: int = 500) -> list[str]:
-        follow_col, source_col = self._find_follow_cols()
-        order_col = "created_at"
-        sql = f"""
-            SELECT {follow_col} AS u
-            FROM followings
-            WHERE {source_col}=%s
-            AND {follow_col} IS NOT NULL
-            AND {follow_col} <> ''
-            GROUP BY {follow_col}
-            ORDER BY MAX({order_col}) DESC
-            LIMIT %s
         """
-        params = (owner, int(limit))
-        out: list[str] = []
-        with self._store._connect() as con:
-            with con.cursor() as cur:
-                cur.execute(sql, params)
-                for r in (cur.fetchall() or []):
-                    v = (r.get("u") or "").strip().lower()
-                    if v:
-                        out.append(v)
-
+        Obtiene followings para un owner usando el método público del port.
+        Evita acoplamiento a métodos privados del repositorio.
+        """
+        out = self._store.get_followings_for_owner(owner, limit=limit)
         log.info(
             "fetch_to_analyze_db_followings",
-            follow_col=follow_col,
-            source_col=source_col,
-            order_col=order_col,
             owner=owner,
             items=len(out),
         )

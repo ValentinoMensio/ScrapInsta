@@ -918,3 +918,58 @@ class JobStoreSQL(JobStorePort):
             return started == 1
         finally:
             self._return(con)
+
+    def get_job_metadata(self, job_id: str) -> Dict[str, Any]:
+        """
+        Obtiene los metadatos de un job (kind, priority, batch_size, extra_json).
+        
+        Implementación pública para evitar acoplamiento a métodos privados.
+        """
+        sql = "SELECT kind, priority, batch_size, extra_json FROM jobs WHERE id=%s LIMIT 1"
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (job_id,), "select", "jobs")
+                row = cur.fetchone()
+                if not row:
+                    raise RuntimeError(f"job {job_id!r} no existe")
+                return {
+                    "kind": row["kind"],
+                    "priority": int(row["priority"]),
+                    "batch_size": int(row["batch_size"]),
+                    "extra": json.loads(row["extra_json"]) if row.get("extra_json") else None,
+                }
+        finally:
+            self._return(con)
+
+    def get_followings_for_owner(self, owner: str, limit: int = 500) -> List[str]:
+        """
+        Obtiene la lista de followings para un owner específico.
+        
+        Implementación pública para evitar acoplamiento a métodos privados.
+        """
+        follow_col, source_col = ("username_target", "username_origin")
+        order_col = "created_at"
+        sql = f"""
+            SELECT {follow_col} AS u
+            FROM followings
+            WHERE {source_col}=%s
+            AND {follow_col} IS NOT NULL
+            AND {follow_col} <> ''
+            GROUP BY {follow_col}
+            ORDER BY MAX({order_col}) DESC
+            LIMIT %s
+        """
+        params = (owner, int(limit))
+        out: List[str] = []
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, params, "select", "followings")
+                for r in (cur.fetchall() or []):
+                    v = (r.get("u") or "").strip().lower()
+                    if v:
+                        out.append(v)
+        finally:
+            self._return(con)
+        return out

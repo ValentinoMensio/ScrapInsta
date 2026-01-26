@@ -48,13 +48,11 @@ def api_client(monkeypatch: pytest.MonkeyPatch, mock_job_store, mock_client_repo
     app.state.dependencies = mock_deps
     
     with patch('scrapinsta.interface.dependencies.get_dependencies', return_value=mock_deps):
-        with patch('scrapinsta.interface.api._job_store', mock_job_store):
-            with patch('scrapinsta.interface.api._client_repo', mock_client_repo):
-                with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
-                    with patch('scrapinsta.interface.api._CLIENTS', {}):
-                        with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
-                            with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
-                                yield TestClient(app)
+        with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
+            with patch('scrapinsta.interface.api._CLIENTS', {}):
+                with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
+                    with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
+                        yield TestClient(app)
 
 
 class TestSecurityHeaders:
@@ -99,20 +97,18 @@ class TestSecurityHeaders:
                 app.state.dependencies = mock_deps
                 
                 with patch('scrapinsta.interface.dependencies.get_dependencies', return_value=mock_deps):
-                    with patch('scrapinsta.interface.api._job_store', mock_job_store):
-                        with patch('scrapinsta.interface.api._client_repo', mock_client_repo):
-                            with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
-                                with patch('scrapinsta.interface.api._CLIENTS', {}):
-                                    with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
-                                        with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
-                                            # Recrear la app para que el middleware use el nuevo REQUIRE_HTTPS
-                                            from scrapinsta.interface.app_factory import create_app
-                                            test_app = create_app(mock_deps)
-                                            client = TestClient(test_app)
-                                            response = client.get("/health")
-                                            
-                                            assert "Strict-Transport-Security" in response.headers
-                                            assert "max-age=31536000" in response.headers["Strict-Transport-Security"]
+                    with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
+                        with patch('scrapinsta.interface.api._CLIENTS', {}):
+                            with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
+                                with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
+                                    # Recrear la app para que el middleware use el nuevo REQUIRE_HTTPS
+                                    from scrapinsta.interface.app_factory import create_app
+                                    test_app = create_app(mock_deps)
+                                    client = TestClient(test_app)
+                                    response = client.get("/health")
+                                    
+                                    assert "Strict-Transport-Security" in response.headers
+                                    assert "max-age=31536000" in response.headers["Strict-Transport-Security"]
     
     def test_hsts_header_not_present_when_https_not_required(self, api_client: TestClient):
         """HSTS header no se agrega cuando REQUIRE_HTTPS=false."""
@@ -156,29 +152,27 @@ class TestHTTPSEnforcement:
             app.state.dependencies = mock_deps
             
             with patch('scrapinsta.interface.dependencies.get_dependencies', return_value=mock_deps):
-                with patch('scrapinsta.interface.api._job_store', mock_job_store):
-                    with patch('scrapinsta.interface.api._client_repo', mock_client_repo):
-                        with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
-                            with patch('scrapinsta.interface.api._CLIENTS', {}):
-                                with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
-                                    with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
-                                        client = TestClient(app)
-                                        
-                                        # Usar un endpoint que sí valida HTTPS (como /jobs/{job_id}/summary)
-                                        # Simular request HTTP (sin x-forwarded-proto o con http)
-                                        response = client.get(
-                                            "/jobs/test-job/summary",
-                                            headers={
-                                                "X-Forwarded-Proto": "http",
-                                                "X-Api-Key": "test-secret-key"
-                                            }
-                                        )
-                                        
-                                        # Debería rechazar con 400 por HTTPS requerido
-                                        assert response.status_code == 400
-                                        data = response.json()
-                                        assert "error" in data
-                                        assert "HTTPS" in data["error"]["message"]
+                with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
+                    with patch('scrapinsta.interface.api._CLIENTS', {}):
+                        with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
+                            with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
+                                client = TestClient(app)
+                                
+                                # Usar un endpoint que sí valida HTTPS (como /jobs/{job_id}/summary)
+                                # Simular request HTTP (sin x-forwarded-proto o con http)
+                                response = client.get(
+                                    "/jobs/test-job/summary",
+                                    headers={
+                                        "X-Forwarded-Proto": "http",
+                                        "X-Api-Key": "test-secret-key"
+                                    }
+                                )
+                                
+                                # Debería rechazar con 400 por HTTPS requerido
+                                assert response.status_code == 400
+                                data = response.json()
+                                assert "error" in data
+                                assert "HTTPS" in data["error"]["message"]
     
     def test_https_allowed_when_enabled(self, monkeypatch: pytest.MonkeyPatch):
         """Cuando REQUIRE_HTTPS=true, se permiten requests HTTPS."""
@@ -237,26 +231,24 @@ class TestCORS:
         app.state.dependencies = mock_deps
         
         with patch('scrapinsta.interface.dependencies.get_dependencies', return_value=mock_deps):
-            with patch('scrapinsta.interface.api._job_store', mock_job_store):
-                with patch('scrapinsta.interface.api._client_repo', mock_client_repo):
-                    with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
-                        with patch('scrapinsta.interface.api._CLIENTS', {}):
-                            with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
-                                with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
-                                    # Recrear la app para que CORS se configure con los nuevos orígenes
-                                    from scrapinsta.interface.app_factory import create_app
-                                    test_app = create_app(mock_deps)
-                                    client = TestClient(test_app)
-                                    
-                                    # Hacer un request con Origin
-                                    response = client.get(
-                                        "/health",
-                                        headers={"Origin": "http://localhost:3000"}
-                                    )
-                                    
-                                    # Debería tener Access-Control-Allow-Origin
-                                    assert "Access-Control-Allow-Origin" in response.headers
-                                    assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:3000"
+            with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
+                with patch('scrapinsta.interface.api._CLIENTS', {}):
+                    with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
+                        with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
+                            # Recrear la app para que CORS se configure con los nuevos orígenes
+                            from scrapinsta.interface.app_factory import create_app
+                            test_app = create_app(mock_deps)
+                            client = TestClient(test_app)
+                            
+                            # Hacer un request con Origin
+                            response = client.get(
+                                "/health",
+                                headers={"Origin": "http://localhost:3000"}
+                            )
+                            
+                            # Debería tener Access-Control-Allow-Origin
+                            assert "Access-Control-Allow-Origin" in response.headers
+                            assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:3000"
     
     def test_cors_preflight_request(self, api_client: TestClient):
         """CORS maneja correctamente preflight requests (OPTIONS)."""

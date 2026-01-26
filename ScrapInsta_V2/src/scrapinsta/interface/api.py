@@ -6,12 +6,7 @@ import json
 
 from fastapi import FastAPI, HTTPException, Request, Response
 
-from scrapinsta.config.settings import Settings
-from scrapinsta.infrastructure.db.job_store_sql import JobStoreSQL
-from scrapinsta.infrastructure.db.client_repo_sql import ClientRepoSQL
-from scrapinsta.infrastructure.redis import RedisClient, DistributedRateLimiter
 from scrapinsta.interface.dependencies import Dependencies, get_dependencies
-from passlib.context import CryptContext
 from scrapinsta.crosscutting.logging_config import (
     configure_structured_logging,
     get_logger,
@@ -31,82 +26,21 @@ configure_structured_logging(
 )
 logger = get_logger("api")
 
-# Variables globales para compatibilidad hacia atrás
-# Se pueden sobrescribir usando el app factory con dependencias inyectadas
-_settings: Optional[Settings] = None
-_job_store: Optional[Any] = None
-_client_repo: Optional[Any] = None
-_redis_client_wrapper: Optional[RedisClient] = None
-_redis_client: Optional[Any] = None
-_distributed_rate_limiter: Optional[DistributedRateLimiter] = None
-pwd_context: Optional[CryptContext] = None
-
-# Inicialización lazy de dependencias globales (para compatibilidad)
-def _init_globals() -> None:
-    """Inicializa variables globales si no están ya inicializadas."""
-    global _settings, _job_store, _client_repo, _redis_client_wrapper
-    global _redis_client, _distributed_rate_limiter, pwd_context
-    
-    if _settings is None:
-        _settings = Settings()
-        logger.info("api_started", db_dsn=_settings.db_dsn)
-        _job_store = JobStoreSQL(_settings.db_dsn)
-        _client_repo = ClientRepoSQL(_settings.db_dsn)
-        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-        
-        # Redis para rate limiting distribuido y caché
-        _redis_client_wrapper = RedisClient(_settings)
-        _redis_client = _redis_client_wrapper.client
-        _distributed_rate_limiter = DistributedRateLimiter(_redis_client)
-        
-        # Fallback al rate limiter en memoria si Redis no está disponible
-        if not _distributed_rate_limiter.enabled:
-            logger.warning("redis_unavailable", fallback="memory_rate_limiter")
+# NOTA: Variables globales eliminadas - usar app.state.dependencies o get_dependencies()
+# Las variables globales causaban problemas de estado compartido y dificultaban testing
 
 
 def _get_deps_from_request(request: Optional[Request] = None) -> Dependencies:
     """
-    Obtiene dependencias desde app.state o usa las globales como fallback.
+    Obtiene dependencias desde app.state o crea nuevas si no existen.
     
     Útil para endpoints que pueden recibir request y acceder a app.state.dependencies.
     """
     if request and hasattr(request.app.state, 'dependencies'):
         return request.app.state.dependencies
-    _init_globals()
+    # Si no hay request o app.state.dependencies, crear nuevas dependencias
+    # (no usar variables globales para evitar estado compartido)
     return get_dependencies()
-
-
-def _setup_app(app: FastAPI, dependencies: Optional[Dependencies] = None) -> None:
-    """
-    Configura la aplicación FastAPI con middlewares, CORS, exception handlers y routes.
-    
-    Args:
-        app: Aplicación FastAPI a configurar
-        dependencies: Dependencias a usar (se obtienen de app.state si no se proveen)
-    """
-    if dependencies is None:
-        dependencies = getattr(app.state, 'dependencies', None) or get_dependencies()
-    
-    # Configurar CORS
-    cors_origins = os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else []
-    if cors_origins:
-        from fastapi.middleware.cors import CORSMiddleware
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=[origin.strip() for origin in cors_origins if origin.strip()],
-            allow_credentials=True,
-            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            allow_headers=["*"],
-            expose_headers=["X-Request-ID", "X-Trace-ID"],
-            max_age=3600,
-        )
-        logger.info("cors_enabled", origins=cors_origins)
-    else:
-        logger.info("cors_disabled", message="CORS deshabilitado (ningún origen permitido)")
-
-
-# Inicializar globales para compatibilidad
-_init_globals()
 
 # Crear app usando factory para tener DI container
 # Esto permite inyectar dependencias en tests y mantener compatibilidad
@@ -205,11 +139,10 @@ async def general_exception_handler(request: Request, exc: Exception):
     Usa ExceptionMapper con registry pattern para mapear excepciones de dominio
     a excepciones HTTP de forma centralizada y extensible.
     """
-    from scrapinsta.crosscutting.exception_mapping import get_exception_mapper
+    from scrapinsta.crosscutting.exception_mapping import map_exception_to_http_error
     
     # Usar el mapper para convertir la excepción
-    mapper = get_exception_mapper()
-    http_exc = mapper.map(exc)
+    http_exc = map_exception_to_http_error(exc)
     
     # Logging estructurado
     logger.exception(
@@ -249,19 +182,36 @@ _get_client_account = get_client_account
 
 
 # =========================================================
-# Configuración final de la app (si no se usó factory)
+# Configuración final de la app (solo si NO se usó factory)
 # =========================================================
 
 # Si el app no tiene middlewares configurados, configurarlos ahora
-# (esto solo ocurre si no se usó el factory)
+# (esto solo ocurre si no se usó el factory - caso edge/fallback)
 if not hasattr(app.state, '_configured'):
     app.add_middleware(ObservabilityMiddleware)
     app.add_middleware(SecurityMiddleware)
-    _setup_app(app)
+    
+    # Configurar CORS (solo si no se configuró en factory)
+    cors_origins = os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else []
+    if cors_origins:
+        from fastapi.middleware.cors import CORSMiddleware
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[origin.strip() for origin in cors_origins if origin.strip()],
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-ID", "X-Trace-ID"],
+            max_age=3600,
+        )
+        logger.info("cors_enabled", origins=cors_origins)
+    
+    # Registrar routers solo si no se configuraron en factory
+    app.include_router(auth_router)
+    app.include_router(send_router)
+    app.include_router(external_router)
+    app.include_router(health_router)
+    
     app.state._configured = True
-
-# Registrar routers
-app.include_router(auth_router)
-app.include_router(send_router)
-app.include_router(external_router)
-app.include_router(health_router)
+# Si se usó factory, los routers ya están registrados en app_factory.py
+# No duplicar el registro aquí

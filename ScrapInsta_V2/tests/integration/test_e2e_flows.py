@@ -139,13 +139,11 @@ def api_client(mock_job_store: Mock, mock_client_repo: Mock, monkeypatch: pytest
     
     # Mockear get_dependencies() y variables globales
     with patch('scrapinsta.interface.dependencies.get_dependencies', return_value=mock_deps):
-        with patch('scrapinsta.interface.api._job_store', mock_job_store):
-            with patch('scrapinsta.interface.api._client_repo', mock_client_repo):
-                with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
-                    with patch('scrapinsta.interface.api._CLIENTS', {}):
-                        with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
-                            with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
-                                yield TestClient(app)
+        with patch('scrapinsta.interface.api.API_SHARED_SECRET', "test-secret-key"):
+            with patch('scrapinsta.interface.api._CLIENTS', {}):
+                with patch('scrapinsta.interface.auth.authentication.API_SHARED_SECRET', "test-secret-key"):
+                    with patch('scrapinsta.interface.auth.authentication._CLIENTS', {}):
+                        yield TestClient(app)
 
 
 @pytest.fixture

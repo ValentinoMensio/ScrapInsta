@@ -260,3 +260,35 @@ class JobStorePort(Protocol):
             Número de tareas reencoladas
         """
         ...
+
+    def get_job_metadata(self, job_id: str) -> Dict[str, Any]:
+        """
+        Obtiene los metadatos de un job (kind, priority, batch_size, extra_json).
+        
+        Args:
+            job_id: ID del job
+            
+        Returns:
+            Diccionario con metadatos del job:
+            - kind: Tipo de job
+            - priority: Prioridad
+            - batch_size: Tamaño de lote
+            - extra: Metadatos adicionales (dict parseado desde JSON)
+            
+        Raises:
+            RuntimeError: Si el job no existe
+        """
+        ...
+
+    def get_followings_for_owner(self, owner: str, limit: int = 500) -> List[str]:
+        """
+        Obtiene la lista de followings para un owner específico.
+        
+        Args:
+            owner: Username del owner
+            limit: Límite de resultados
+            
+        Returns:
+            Lista de usernames que el owner sigue
+        """
+        ...
