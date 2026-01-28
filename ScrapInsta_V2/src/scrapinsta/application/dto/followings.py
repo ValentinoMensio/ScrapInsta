@@ -24,6 +24,22 @@ class FetchFollowingsRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_limit_field(cls, data):
+        """
+        Acepta tanto 'limit' como 'max_followings' en el payload y los normaliza a 'max_followings'.
+        Si vienen ambos, prioriza 'max_followings'.
+        Esto es necesario porque el dispatcher guarda 'limit' en extra_json pero el DTO usa 'max_followings'.
+        """
+        if isinstance(data, dict):
+            if "max_followings" not in data and "limit" in data:
+                try:
+                    data["max_followings"] = int(data.get("limit"))
+                except Exception:
+                    pass
+        return data
+
     @field_validator("username")
     @classmethod
     def validar_username(cls, v: str) -> str:
@@ -46,21 +62,6 @@ class FetchFollowingsResponse(BaseModel):
     source: str = Field(default="selenium", description="Origen del scraping")
 
     model_config = ConfigDict(frozen=True)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_limit_field(cls, data):
-        """
-        Acepta tanto 'limit' como 'max_followings' en el payload y los normaliza a 'max_followings'.
-        Si vienen ambos, prioriza 'max_followings'.
-        """
-        if isinstance(data, dict):
-            if "max_followings" not in data and "limit" in data:
-                try:
-                    data["max_followings"] = int(data.get("limit"))
-                except Exception:
-                    pass
-        return data
 
     @field_validator("owner")
     @classmethod

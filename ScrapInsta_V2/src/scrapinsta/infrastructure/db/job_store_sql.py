@@ -134,6 +134,11 @@ class JobStoreSQL(JobStorePort):
         """Devuelve la conexión al pool (o la cierra si no se puede reutilizar)."""
         try:
             if con and not con._closed and not con.get_autocommit():
+                # Cerrar transacción abierta para evitar snapshots viejos
+                try:
+                    con.commit()
+                except Exception:
+                    pass
                 con.ping(reconnect=True)
             try:
                 self._pool.put_nowait(con)
@@ -184,7 +189,8 @@ class JobStoreSQL(JobStorePort):
             VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)
             ON DUPLICATE KEY UPDATE
               kind=VALUES(kind), priority=VALUES(priority), batch_size=VALUES(batch_size),
-              extra_json=VALUES(extra_json), total_items=VALUES(total_items), updated_at=CURRENT_TIMESTAMP
+              extra_json=VALUES(extra_json), total_items=VALUES(total_items),
+              client_id=VALUES(client_id), updated_at=CURRENT_TIMESTAMP
         """
         con = self._connect()
         try:
@@ -433,6 +439,7 @@ class JobStoreSQL(JobStorePort):
             with con.cursor() as cur:
                 self._execute_query(cur, sql, (job_id,), "select", "jobs")
                 row = cur.fetchone()
+                con.commit()
                 if row:
                     return row.get("client_id")
                 return None
@@ -513,11 +520,12 @@ class JobStoreSQL(JobStorePort):
             with con.cursor() as cur:
                 self._execute_query(cur, sql, params, "select", "job_tasks")
                 row = cur.fetchone() or {}
+                con.commit()
                 return {
-                    "queued": int(row.get("queued", 0)),
-                    "sent": int(row.get("sent", 0)),
-                    "ok": int(row.get("ok", 0)),
-                    "error": int(row.get("error", 0)),
+                    "queued": int(row.get("queued") or 0),
+                    "sent": int(row.get("sent") or 0),
+                    "ok": int(row.get("ok") or 0),
+                    "error": int(row.get("error") or 0),
                 }
         finally:
             self._return(con)

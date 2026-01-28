@@ -15,15 +15,15 @@ log = get_logger("human_tempo")
 class HumanTempoConfig:
     """
     Configuración del ritmo humano.
-    - base_apm: acciones por minuto “objetivo”.
+    - base_apm: acciones por minuto "objetivo".
     - apm_jitter: variación relativa del APM en cada acción (0.3 => ±30%).
     - long_pause_every: cada cuántas acciones insertar una pausa larga.
     - long_pause_range: rango de la pausa larga (segundos).
     """
-    base_apm: int = 24  # Optimizado: aumentado de 18 a 24 (~25% más rápido, aún humano)
-    apm_jitter: float = 0.35
-    long_pause_every: int = 20
-    long_pause_range: tuple[float, float] = (6.0, 12.0)
+    base_apm: int = 45  # Optimizado: aumentado de 24 a 45 (~2x más rápido para scraping masivo)
+    apm_jitter: float = 0.25  # Reducido de 0.35 a 0.25 para más consistencia
+    long_pause_every: int = 50  # Aumentado de 20 a 50 (menos pausas largas)
+    long_pause_range: tuple[float, float] = (2.0, 5.0)  # Reducido de 6-12 a 2-5
 
     # Semilla opcional para reproducibilidad por sesión/cuenta
     seed: int | None = None

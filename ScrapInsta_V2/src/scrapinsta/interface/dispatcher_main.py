@@ -128,12 +128,13 @@ def _items_from_meta_for_job(job_id: str, meta: Dict[str, Any], *, store: JobSto
     return []
 
 
-def _ensure_tasks_for_job(store: JobStoreSQL, job_id: str, kind: str, items: List[str], extra: Optional[dict]) -> None:
+def _ensure_tasks_for_job(store: JobStoreSQL, job_id: str, kind: str, items: List[str], extra: Optional[dict], client_id: Optional[str] = None) -> None:
     """
     Asegura que existan tasks en DB para los items del job.
     Idempotente: add_task hace upsert y NO pisa status si ya fue completada.
     """
-    client_id = store.get_job_client_id(job_id)
+    if not client_id:
+        client_id = store.get_job_client_id(job_id)
     if not client_id:
         log.error("job_missing_client_id", job_id=job_id)
         raise ValueError(f"Job {job_id} no tiene client_id asignado")
@@ -336,7 +337,7 @@ class FetchToAnalyzeOrchestrator:
                 client_id=client_id,
             )
             self._store.mark_job_running(analyze_job_id)
-            _ensure_tasks_for_job(self._store, analyze_job_id, "analyze_profile", items, {"usernames": items})
+            _ensure_tasks_for_job(self._store, analyze_job_id, "analyze_profile", items, {"usernames": items}, client_id=client_id)
 
             analyze_job = Job(
                 job_id=analyze_job_id,

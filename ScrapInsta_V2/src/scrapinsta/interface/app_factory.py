@@ -97,7 +97,7 @@ def create_app(
     # Configurar exception handlers
     from scrapinsta.crosscutting.exceptions import ScrapInstaHTTPError
     from fastapi import HTTPException
-    from scrapinsta.interface.api import (
+    from scrapinsta.interface.middleware.exception_handlers import (
         scrapinsta_http_exception_handler,
         fastapi_http_exception_handler,
         general_exception_handler,

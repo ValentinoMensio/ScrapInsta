@@ -218,3 +218,34 @@ class TestFetchFollowingsUseCase:
         owner_vo = call_args[0][0]  # Primer argumento es el Username VO
         assert owner_vo.value == "testowner"
 
+    def test_fetch_followings_request_converts_limit_to_max_followings(self):
+        """Test que FetchFollowingsRequest convierte 'limit' a 'max_followings'."""
+        # Este test verifica el bug donde el dispatcher enviaba 'limit' pero
+        # el DTO esperaba 'max_followings', causando que se usara el default de 100.
+        
+        # Simular payload como lo envía el dispatcher (con 'limit' en lugar de 'max_followings')
+        payload = {
+            "username": "testowner",
+            "limit": 5,  # El dispatcher envía 'limit'
+            "source": "ext",
+            "client_account": "myclient",
+        }
+        
+        request = FetchFollowingsRequest(**payload)
+        
+        # Verificar que se convirtió correctamente
+        assert request.max_followings == 5
+        assert request.username == "testowner"
+    
+    def test_fetch_followings_request_prefers_max_followings_over_limit(self):
+        """Test que FetchFollowingsRequest prioriza 'max_followings' sobre 'limit'."""
+        payload = {
+            "username": "testowner",
+            "limit": 5,
+            "max_followings": 10,  # Si ambos están presentes, prioriza max_followings
+        }
+        
+        request = FetchFollowingsRequest(**payload)
+        
+        assert request.max_followings == 10  # max_followings tiene prioridad
+

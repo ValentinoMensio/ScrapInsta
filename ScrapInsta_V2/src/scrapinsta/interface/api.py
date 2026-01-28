@@ -72,94 +72,17 @@ from scrapinsta.interface.routers import (
 )
 
 
-@app.exception_handler(ScrapInstaHTTPError)
-async def scrapinsta_http_exception_handler(request: Request, exc: ScrapInstaHTTPError):
-    """Handler para excepciones HTTP personalizadas de ScrapInsta."""
-    logger.warning(
-        "http_error",
-        error_code=exc.error_code,
-        status_code=exc.status_code,
-        message=exc.message,
-        path=request.url.path,
-        method=request.method,
-        details=exc.details,
-    )
-    
-    return Response(
-        content=json.dumps(exc.to_dict()),
-        status_code=exc.status_code,
-        media_type="application/json",
-    )
+# Exception handlers importados desde módulo separado para evitar import circular
+from scrapinsta.interface.middleware.exception_handlers import (
+    scrapinsta_http_exception_handler,
+    fastapi_http_exception_handler,
+    general_exception_handler,
+)
 
-
-@app.exception_handler(HTTPException)
-async def fastapi_http_exception_handler(request: Request, exc: HTTPException):
-    """
-    Handler para HTTPException de FastAPI.
-    Convierte a formato consistente de ScrapInsta.
-    """
-    # Mapear códigos comunes a nuestros códigos de error
-    error_code_map = {
-        400: "BAD_REQUEST",
-        401: "UNAUTHORIZED",
-        403: "FORBIDDEN",
-        404: "NOT_FOUND",
-        409: "CONFLICT",
-        429: "RATE_LIMIT_EXCEEDED",
-        500: "INTERNAL_ERROR",
-        503: "SERVICE_UNAVAILABLE",
-    }
-    
-    error_code = error_code_map.get(exc.status_code, "HTTP_ERROR")
-    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-    
-    logger.warning(
-        "http_exception",
-        error_code=error_code,
-        status_code=exc.status_code,
-        detail=detail,
-        path=request.url.path,
-        method=request.method,
-    )
-    
-    return Response(
-        content=json.dumps({
-            "error": {
-                "code": error_code,
-                "message": detail,
-            }
-        }),
-        status_code=exc.status_code,
-        media_type="application/json",
-    )
-
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """
-    Handler genérico para excepciones no manejadas.
-    Captura todas las excepciones y las convierte a respuestas HTTP consistentes.
-    
-    Usa ExceptionMapper con registry pattern para mapear excepciones de dominio
-    a excepciones HTTP de forma centralizada y extensible.
-    """
-    from scrapinsta.crosscutting.exception_mapping import get_exception_mapper
-    
-    # Usar el mapper para convertir la excepción
-    mapper = get_exception_mapper()
-    http_exc = mapper.map(exc)
-    
-    # Logging estructurado
-    logger.exception(
-        "unhandled_exception",
-        error_type=type(exc).__name__,
-        error_message=str(exc),
-        path=request.url.path,
-        method=request.method,
-        http_error_code=http_exc.error_code,
-    )
-    
-    return await scrapinsta_http_exception_handler(request, http_exc)
+# Registrar handlers en la app
+app.add_exception_handler(ScrapInstaHTTPError, scrapinsta_http_exception_handler)
+app.add_exception_handler(HTTPException, fastapi_http_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
 
 # Funciones de autenticación y rate limiting extraídas a interface/auth/
 # Importar desde módulos dedicados

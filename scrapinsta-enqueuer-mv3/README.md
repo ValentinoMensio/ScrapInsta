@@ -4,9 +4,10 @@ Extensión mínima para encolar `fetch_followings` y `analyze_profile` hacia tu 
 
 ## ✨ Características
 - ✅ **Dos modos de operación**: Followings y Analyze
-- ✅ **Autenticación flexible**: X-Api-Key o Bearer Token
+- ✅ **Autenticación flexible**: X-Api-Key, Bearer Token o JWT automático
 - ✅ **Multi-tenant**: Soporte para X-Client-Id con scopes y rate limiting
-- ✅ **Interfaz moderna**: Popup tipo Instagram con gradientes
+- ✅ **Seguimiento de Jobs**: Ver progreso en tiempo real con auto-refresh
+- ✅ **Interfaz moderna**: Popup tipo Instagram con gradientes y badges de estado
 - ✅ **Validación robusta**: Errores claros y manejo de respuestas
 - ✅ **Compatible con ScrapInsta V2**: Respeta 100% la API del backend
 
@@ -33,6 +34,27 @@ Extensión mínima para encolar `fetch_followings` y `analyze_profile` hacia tu 
   }
   ```
 - Respuesta esperada: `{ "job_id": "job:...", "total_items": 2 }`
+
+### 📊 Seguimiento de Jobs
+Después de encolar un trabajo, la extensión muestra automáticamente:
+- **Barra de progreso** visual con porcentaje
+- **Badges de estado** con contadores:
+  - ⏳ **Queued**: Tareas en cola
+  - 🚀 **Sent**: Tareas en ejecución
+  - ✅ **OK**: Tareas completadas
+  - ❌ **Error**: Tareas fallidas
+- **Auto-refresh** cada 5 segundos mientras el job está en progreso
+- **Persistencia**: Recuerda el último job al reabrir el popup
+
+El estado se obtiene de `GET /jobs/{job_id}/summary`:
+```json
+{
+  "queued": 10,
+  "sent": 2,
+  "ok": 5,
+  "error": 1
+}
+```
 
 ### Headers enviados
 - `X-Account: <usuario_instagram_cliente>` - **requerido**
@@ -78,15 +100,23 @@ Extensión mínima para encolar `fetch_followings` y `analyze_profile` hacia tu 
    - **Followings**: Ingresa username objetivo y límite → Click "Encolar"
    - **Analyze**: Pega usernames (uno por línea o coma) y batch_size → Click "Encolar analyze"
 
-4. El **servidor/dispatcher** procesará según tu lógica configurada
+4. **Seguir progreso** en tiempo real:
+   - Automáticamente se muestra el estado del job
+   - Badges de colores indican: queued, sent, ok, error
+   - Barra de progreso muestra % completado
+   - Auto-refresh cada 5 segundos (se detiene al completar)
+   - Botón "Ver Estado" para refrescar manualmente
+
+5. El **servidor/dispatcher** procesará según tu lógica configurada
 
 ## 🔌 API Backend Requerida
 
 Esta extensión está diseñada para trabajar con **ScrapInsta V2**. Endpoints esperados:
 
 - **GET** `/health` - Health check
+- **POST** `/api/auth/login` - Login JWT (opcional, si usas autenticación JWT)
 - **POST** `/ext/followings/enqueue` - Encolar fetch followings
 - **POST** `/ext/analyze/enqueue` - Encolar análisis de perfiles
-- **GET** `/jobs/{job_id}/summary` - Resumen de job (no usado por extensión)
+- **GET** `/jobs/{job_id}/summary` - Resumen de job (para seguimiento de progreso)
 
 Ver [README del backend](../ScrapInsta_V2/README.md) para más detalles sobre la API.

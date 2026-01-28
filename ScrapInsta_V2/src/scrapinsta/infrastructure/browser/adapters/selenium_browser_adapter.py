@@ -247,6 +247,7 @@ class SeleniumBrowserAdapter(BrowserPort):
         username: str,
         *,
         max_reels: int = 5,
+        fast_mode: bool = True,
     ) -> Tuple[List[ReelMetrics], BasicStats]:
         account = getattr(self.driver, "account_id", "unknown")
         start = time.time()
@@ -258,6 +259,7 @@ class SeleniumBrowserAdapter(BrowserPort):
                 self.driver,
                 limit=max_reels,
                 scheduler=self._sched,
+                fast_mode=fast_mode,
             )
             reels: List[ReelMetrics] = []
             for r in rows:

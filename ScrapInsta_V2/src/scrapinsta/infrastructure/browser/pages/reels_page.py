@@ -73,37 +73,37 @@ def hover_element_human_fast(
     el,
     *,
     scheduler: Optional[HumanScheduler] = None,
-    min_pause: float = 0.08,
-    max_pause: float = 0.18,
+    min_pause: float = 0.03,
+    max_pause: float = 0.08,
 ) -> None:
     """
-    Hover optimizado para reels - más rápido que hover_element_human.
-    - Pausas reducidas para navegación más ágil.
-    - Menos overshoot para transiciones más directas.
+    Hover ultra-optimizado para reels - máxima velocidad manteniendo naturalidad mínima.
+    - Pausas mínimas para navegación rápida.
+    - Movimiento directo sin overshoot significativo.
     """
     try:
-        if scheduler:
-            scheduler.wait_turn()
+        # NO llamar scheduler.wait_turn() aquí para mayor velocidad
+        # El scheduler se usa solo en puntos críticos del flujo principal
 
         from selenium.webdriver import ActionChains
         import random
         
         actions = ActionChains(driver)
 
-        # Overshoot mínimo para velocidad
-        off_x = random.randint(2, 8)  # Reducido de 3-14 a 2-8
-        off_y = random.randint(2, 8)  # Reducido de 3-14 a 2-8
+        # Movimiento directo al elemento con offset mínimo
+        off_x = random.randint(1, 4)
+        off_y = random.randint(1, 4)
 
         actions.move_to_element_with_offset(el, off_x, off_y)
-        actions.pause(random.uniform(min_pause * 0.3, max_pause * 0.4))  # Reducido
+        actions.pause(random.uniform(min_pause, max_pause * 0.5))
 
         # Corrección rápida hacia el centro
         actions.move_to_element(el)
-        actions.pause(random.uniform(min_pause * 0.4, max_pause * 0.6))  # Reducido
+        actions.pause(random.uniform(min_pause, max_pause))
         actions.perform()
 
-        # Micro-pausa mínima para UI
-        sleep_jitter(random.uniform(0.06, 0.15), 0.3)  # Reducido de 0.12-0.3 a 0.06-0.15
+        # Micro-pausa mínima solo para que aparezca el overlay
+        sleep_jitter(random.uniform(0.03, 0.07), 0.2)
 
     except Exception as e:
         logger.debug("hover_element_human_fast: fallo no crítico: %s", e)
@@ -142,12 +142,14 @@ def extract_reel_metrics_list(
     *,
     limit: int = 5,
     scheduler: Optional[HumanScheduler] = None,
+    fast_mode: bool = True,
 ) -> List[Dict[str, int | str]]:
     """
     Recolecta métricas por reel (lista de dicts):
         [{"url", "code", "views", "likes", "comments"}, ...]
     - Solo usa vistas y, tras hover humano, likes y comentarios.
     - Sin duración ni fecha.
+    - fast_mode=True (default): tiempos ultra-reducidos para scraping masivo.
     """
     sched = scheduler or HumanScheduler()
 
@@ -157,7 +159,7 @@ def extract_reel_metrics_list(
 
     # Espera mínima a que aparezcan anchors de reels
     try:
-        WebDriverWait(driver, 5).until(
+        WebDriverWait(driver, 3).until(  # Reducido de 5 a 3
             EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a[href*='/reel/']"))
         )
     except TimeoutException:
@@ -165,20 +167,19 @@ def extract_reel_metrics_list(
         return []
 
     reels = _query_reels(driver)
-    logger.info("[reels] visibles=%d", len(reels))
+    logger.info("[reels] visibles=%d fast_mode=%s", len(reels), fast_mode)
 
-    # Arranque "humano" - reducido
-    sleep_jitter(0.5, 0.25)  # Optimizado: reducido de 0.8±0.3 a 0.5±0.25
+    # Arranque rápido
+    sleep_jitter(0.15, 0.15) if fast_mode else sleep_jitter(0.5, 0.25)
     collected: List[Dict[str, int | str]] = []
     seen: Set[str] = set()
     idx = 0
 
     while len(collected) < limit:
         if idx >= len(reels):
-            # Scroll humano para cargar más - más rápido
-            sched.wait_turn()
-            human_scroll(driver, total_px=900, duration=0.6, scheduler=sched)  # Optimizado: reducido de 0.8 a 0.6
-            sleep_jitter(0.15, 0.15)  # Optimizado: reducido de 0.2±0.2 a 0.15±0.15
+            # Scroll rápido para cargar más
+            human_scroll(driver, total_px=900, duration=0.25 if fast_mode else 0.6, scheduler=None)
+            sleep_jitter(0.05, 0.1) if fast_mode else sleep_jitter(0.15, 0.15)
 
             reels_new = _query_reels(driver)
             if len(reels_new) <= len(reels):
@@ -206,25 +207,24 @@ def extract_reel_metrics_list(
         row: Dict[str, int | str] = {"url": href, "code": _shortcode_from_href(href), "views": 0, "likes": 0, "comments": 0}
 
         try:
-            # Centrar el reel en viewport - sin pausa innecesaria
+            # Centrar el reel en viewport - mínima pausa
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", reel)
-            sleep_jitter(0.08, 0.08)  # Optimizado: reducido de 0.1±0.1 a 0.08±0.08
+            sleep_jitter(0.02, 0.05) if fast_mode else sleep_jitter(0.08, 0.08)
 
-            # --- Vistas (sin hover) - optimizado ---
+            # --- Vistas (sin hover) - ultra-rápido ---
             try:
-                sched.wait_turn()
                 views_text = driver.execute_script(JS_GET_VIEWS, reel) or ""
                 if not views_text.strip():
-                    # Verificación rápida de visibilidad - timeout reducido
+                    # Verificación rápida - timeout mínimo
                     try:
-                        WebDriverWait(driver, 0.5).until(  # Reducido de 1.0 a 0.5
+                        WebDriverWait(driver, 0.25 if fast_mode else 0.5).until(
                             EC.visibility_of_element_located(
                                 (By.XPATH, ".//div[contains(@class,'_aagv') or contains(@class,'_aajy') or contains(@class,'_aaj_')]//span")
                             )
                         )
                         views_text = driver.execute_script(JS_GET_VIEWS, reel) or ""
                     except TimeoutException:
-                        pass  # Continuar sin vistas si no aparecen rápido
+                        pass
 
                 if not views_text.strip():
                     logger.debug("[reels] idx=%d sin vistas visibles", idx)
@@ -235,49 +235,47 @@ def extract_reel_metrics_list(
                 logger.debug("[reels] idx=%d vistas no leídas: %s", idx, e)
                 continue
 
-            # --- Likes / Comments (hover humano) - OPTIMIZADO ---
+            # --- Likes / Comments (hover rápido) ---
             try:
                 # Verificación rápida previa: ¿tiene hover disponible?
                 if not has_hover_available(driver, reel):
                     logger.debug("[reels] idx=%d sin hover disponible -> skip", idx)
-                    continue  # ← saltar rápido sin hacer hover
+                    continue
                 
-                sched.wait_turn()
-                
-                # Hover más rápido con configuración optimizada
-                hover_element_human_fast(driver, reel, scheduler=sched)
-                sleep_jitter(0.12, 0.15)  # Reducido aún más: 0.15±0.2 a 0.12±0.15
+                # Hover ultra-rápido
+                hover_element_human_fast(driver, reel, scheduler=None)
+                sleep_jitter(0.04, 0.08) if fast_mode else sleep_jitter(0.12, 0.15)
 
-                # Verificación rápida de hover con timeout reducido
+                # Verificación de métricas
                 pair = driver.execute_script(JS_GET_HOVER_METRICS, reel)
                 if not pair or len(pair) < 2:
-                    # Intento rápido adicional si no hay métricas
-                    sleep_jitter(0.08, 0.1)  # Reducido de 0.1±0.1 a 0.08±0.1
+                    # Un solo intento adicional rápido
+                    sleep_jitter(0.03, 0.05) if fast_mode else sleep_jitter(0.08, 0.1)
                     pair = driver.execute_script(JS_GET_HOVER_METRICS, reel)
                     if not pair or len(pair) < 2:
                         logger.debug("[reels] idx=%d hover sin métricas -> skip", idx)
-                        continue  # ← no guardamos el reel
+                        continue
 
                 likes_text = (pair[0] or "").strip()
                 comments_text = (pair[1] or "").strip()
                 if not likes_text or not comments_text:
                     logger.debug("[reels] idx=%d métricas hover vacías -> skip", idx)
-                    continue  # ← no guardamos el reel
+                    continue
 
                 row["likes"] = parse_number(likes_text)
                 row["comments"] = parse_number(comments_text)
 
-                # (Opcional) si ambos quedan 0, probablemente falló el overlay igual
                 if row["likes"] == 0 and row["comments"] == 0:
                     logger.debug("[reels] idx=%d métricas 0/0 tras parse -> skip", idx)
-                    continue  # ← no guardamos el reel
+                    continue
             except Exception as e:
                 logger.debug("[reels] idx=%d hover fallido: %s -> skip", idx, e)
-                continue  # ← no guardamos el reel
+                continue
 
             collected.append(row)
             logger.info("[reels] idx=%d code=%s v=%s l=%s c=%s", idx, row["code"], row["views"], row["likes"], row["comments"])
-            sleep_jitter(0.15, 0.15)  # Optimizado: reducido de 0.25±0.2 a 0.15±0.15
+            # Pausa mínima entre reels exitosos
+            sleep_jitter(0.05, 0.1) if fast_mode else sleep_jitter(0.15, 0.15)
 
         except Exception as e:
             logger.warning("[reels] idx=%d error inesperado: %s", idx, e)
@@ -292,12 +290,14 @@ def extract_reel_metrics(
     max_reels: int = 5,
     *,
     scheduler: Optional[HumanScheduler] = None,
+    fast_mode: bool = True,
 ) -> Dict[str, int | List[Dict[str, int | str]]]:
     """
     Wrapper retrocompatible con tu firma anterior:
     - Devuelve totales y lista por reel.
+    - fast_mode=True (default): tiempos ultra-reducidos para scraping masivo.
     """
-    data = extract_reel_metrics_list(driver, limit=max_reels, scheduler=scheduler)
+    data = extract_reel_metrics_list(driver, limit=max_reels, scheduler=scheduler, fast_mode=fast_mode)
 
     totals = {
         "total_views": sum(int(d.get("views", 0) or 0) for d in data),
