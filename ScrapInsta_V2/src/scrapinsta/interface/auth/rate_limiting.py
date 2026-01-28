@@ -1,6 +1,7 @@
 """Rate limiting para la API."""
 from __future__ import annotations
 
+import os
 import time
 import threading
 from typing import Dict, Any
@@ -14,6 +15,11 @@ from scrapinsta.interface.dependencies import get_dependencies
 
 logger = get_logger("auth.rate_limiting")
 
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+TRUST_PROXY_HEADERS = os.getenv(
+    "TRUST_PROXY_HEADERS",
+    "true" if APP_ENV == "production" else "false",
+).lower() in ("1", "true", "yes")
 
 class _RateLimiter:
     """
@@ -74,7 +80,13 @@ def rate_limit(client: Dict[str, Any], req: Request) -> None:
     distributed_limiter = deps.distributed_rate_limiter
     
     rpm = int(client.get("rate") or 60)
-    ip = req.headers.get("x-forwarded-for", req.client.host if req.client else "-").split(",")[0].strip()
+    if TRUST_PROXY_HEADERS:
+        ip = req.headers.get(
+            "x-forwarded-for",
+            req.client.host if req.client else "-",
+        ).split(",")[0].strip()
+    else:
+        ip = req.client.host if req.client else "-"
     endpoint = req.url.path
     
     # Intentar usar rate limiting distribuido (Redis)

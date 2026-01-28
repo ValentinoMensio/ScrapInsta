@@ -6,7 +6,11 @@ import os
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-REQUIRE_HTTPS = os.getenv("REQUIRE_HTTPS", "false").lower() in ("1", "true", "yes")
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+REQUIRE_HTTPS = os.getenv(
+    "REQUIRE_HTTPS",
+    "true" if APP_ENV == "production" else "false",
+).lower() in ("1", "true", "yes")
 
 
 class SecurityMiddleware(BaseHTTPMiddleware):

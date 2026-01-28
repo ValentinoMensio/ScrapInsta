@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from typing import List, Optional, Dict, Any
+import os
+import json
+import re
 from uuid import uuid4
 
 from fastapi import APIRouter, Header, Path, Request
@@ -20,6 +23,20 @@ from scrapinsta.interface.dependencies import get_dependencies
 logger = get_logger("routers.external")
 
 router = APIRouter(tags=["external"])
+
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+MAX_FOLLOWINGS_LIMIT = int(os.getenv("MAX_FOLLOWINGS_LIMIT", "100"))
+MAX_ANALYZE_USERNAMES = int(os.getenv("MAX_ANALYZE_USERNAMES", "200" if APP_ENV == "production" else "500"))
+MAX_ANALYZE_BATCH_SIZE = int(os.getenv("MAX_ANALYZE_BATCH_SIZE", "200"))
+MAX_USERNAME_LENGTH = int(os.getenv("MAX_USERNAME_LENGTH", "64"))
+MAX_EXTRA_BYTES = int(os.getenv("MAX_EXTRA_BYTES", "20000"))
+MAX_JOB_ID_LENGTH = int(os.getenv("MAX_JOB_ID_LENGTH", "64"))
+REQUIRE_JOB_ID_PREFIX = os.getenv(
+    "REQUIRE_JOB_ID_PREFIX",
+    "true" if APP_ENV == "production" else "false",
+).lower() in ("1", "true", "yes")
+JOB_ID_REGEX = r"^job:[a-f0-9]{32}$" if REQUIRE_JOB_ID_PREFIX else r"^.+$"
+USERNAME_REGEX = os.getenv("USERNAME_REGEX", r"^[a-zA-Z0-9._]{2,30}$")
 
 
 def _get_deps_from_request(request: Request):
@@ -97,6 +114,18 @@ def enqueue_followings(
     target = (body.target_username or "").strip().lower()
     if not target:
         raise BadRequestError("target_username vacío")
+    if len(target) > MAX_USERNAME_LENGTH:
+        raise BadRequestError(
+            "target_username excede el máximo permitido",
+            details={"max": MAX_USERNAME_LENGTH},
+        )
+    if not re.match(USERNAME_REGEX, target):
+        raise BadRequestError("target_username inválido")
+    if body.limit > MAX_FOLLOWINGS_LIMIT:
+        raise BadRequestError(
+            "limit excede el máximo permitido",
+            details={"limit": body.limit, "max": MAX_FOLLOWINGS_LIMIT},
+        )
 
     job_id = f"job:{uuid4().hex}"
 
@@ -148,10 +177,39 @@ def enqueue_analyze_profile(
     usernames = [str(u).strip().lower() for u in (body.usernames or []) if str(u).strip()]
     if not usernames:
         raise BadRequestError("usernames vacío")
+    too_long = [u for u in usernames if len(u) > MAX_USERNAME_LENGTH]
+    if too_long:
+        raise BadRequestError(
+            "usernames contiene valores demasiado largos",
+            details={"max": MAX_USERNAME_LENGTH},
+        )
+    invalid = [u for u in usernames if not re.match(USERNAME_REGEX, u)]
+    if invalid:
+        raise BadRequestError("usernames contiene valores inválidos")
+    if len(usernames) > MAX_ANALYZE_USERNAMES:
+        raise BadRequestError(
+            "usernames excede el máximo permitido",
+            details={"count": len(usernames), "max": MAX_ANALYZE_USERNAMES},
+        )
+    if body.batch_size > MAX_ANALYZE_BATCH_SIZE:
+        raise BadRequestError(
+            "batch_size excede el máximo permitido",
+            details={"batch_size": body.batch_size, "max": MAX_ANALYZE_BATCH_SIZE},
+        )
 
     job_id = f"job:{uuid4().hex}"
 
     client_id = client.get("id")
+    if body.extra:
+        try:
+            extra_size = len(json.dumps(body.extra, separators=(",", ":"), ensure_ascii=False))
+        except Exception as e:
+            raise BadRequestError("extra inválido", details={"error": str(e)})
+        if extra_size > MAX_EXTRA_BYTES:
+            raise BadRequestError(
+                "extra excede el tamaño permitido",
+                details={"bytes": extra_size, "max": MAX_EXTRA_BYTES},
+            )
     try:
         job_store.create_job(
             job_id=job_id,
@@ -172,7 +230,7 @@ def enqueue_analyze_profile(
 
 @router.get("/jobs/{job_id}/summary", response_model=JobSummaryResponse)
 def job_summary(
-    job_id: str = Path(..., min_length=1),
+    job_id: str = Path(..., min_length=1, max_length=MAX_JOB_ID_LENGTH, pattern=JOB_ID_REGEX),
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
     x_client_id: Optional[str] = Header(None),

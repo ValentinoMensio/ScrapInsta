@@ -5,6 +5,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
 
+from scrapinsta.crosscutting.logging_config import get_logger
+
+logger = get_logger("auth.jwt")
+
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+
 # Cargar SECRET_KEY desde gestor de secretos si está configurado
 _secret_key = os.getenv("JWT_SECRET_KEY") or os.getenv("API_SHARED_SECRET")
 try:
@@ -24,6 +30,11 @@ except Exception:
 SECRET_KEY = _secret_key or "change-me-in-production"
 ALGORITHM = "HS256"
 
+# En producción, no permitir usar el secreto por defecto
+if APP_ENV == "production" and SECRET_KEY == "change-me-in-production":
+    raise RuntimeError("JWT_SECRET_KEY es requerido en producción")
+elif SECRET_KEY == "change-me-in-production":
+    logger.warning("jwt_secret_default_in_use", message="Usando secret por defecto en no-producción")
 # Configurable via env (documentado en MEJORAS_PROFESIONALES.md)
 try:
     ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))

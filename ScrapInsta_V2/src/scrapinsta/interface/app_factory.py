@@ -41,6 +41,7 @@ def create_app(
     from scrapinsta.interface.middleware import (
         ObservabilityMiddleware,
         SecurityMiddleware,
+        RequestSizeLimitMiddleware,
     )
     
     # Configurar logging si no está configurado
@@ -68,6 +69,7 @@ def create_app(
     )
     
     # Configurar middlewares
+    app.add_middleware(RequestSizeLimitMiddleware)
     app.add_middleware(ObservabilityMiddleware)
     app.add_middleware(SecurityMiddleware)
     
@@ -86,7 +88,11 @@ def create_app(
         )
         logger.info("cors_enabled", origins=cors_origins)
     else:
-        logger.info("cors_disabled", message="CORS deshabilitado (ningún origen permitido)")
+        app_env = os.getenv("APP_ENV", "development").lower()
+        if app_env == "production":
+            logger.warning("cors_disabled_in_production", message="CORS sin orígenes en producción")
+        else:
+            logger.info("cors_disabled", message="CORS deshabilitado (ningún origen permitido)")
     
     # Configurar exception handlers
     from scrapinsta.crosscutting.exceptions import ScrapInstaHTTPError

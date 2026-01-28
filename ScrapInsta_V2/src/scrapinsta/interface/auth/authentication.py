@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from typing import Dict, Any, Optional
 
 from fastapi import Request, Header
@@ -41,7 +42,18 @@ try:
 except Exception:
     _CLIENTS = {}
 
-REQUIRE_HTTPS = os.getenv("REQUIRE_HTTPS", "false").lower() in ("1", "true", "yes")
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+REQUIRE_HTTPS = os.getenv(
+    "REQUIRE_HTTPS",
+    "true" if APP_ENV == "production" else "false",
+).lower() in ("1", "true", "yes")
+REQUIRE_ACCOUNT_IN_CONFIG = os.getenv(
+    "REQUIRE_ACCOUNT_IN_CONFIG",
+    "true" if APP_ENV == "production" else "false",
+).lower() in ("1", "true", "yes")
+MAX_USERNAME_LENGTH = int(os.getenv("MAX_USERNAME_LENGTH", "64"))
+USERNAME_REGEX = os.getenv("USERNAME_REGEX", r"^[a-zA-Z0-9._]{2,30}$")
+ACCOUNT_REGEX = os.getenv("ACCOUNT_REGEX", r"^[a-zA-Z0-9._-]{2,30}$")
 
 
 def _normalize(s: Optional[str]) -> Optional[str]:
@@ -190,5 +202,29 @@ def get_client_account(x_account: Optional[str] = None) -> str:
     acc = _normalize(x_account)
     if not acc:
         raise BadRequestError("Falta X-Account")
+    if len(acc) > MAX_USERNAME_LENGTH:
+        raise BadRequestError(
+            "X-Account excede el máximo permitido",
+            details={"max": MAX_USERNAME_LENGTH},
+        )
+    if not re.match(ACCOUNT_REGEX, acc):
+        raise BadRequestError("X-Account inválido")
+    if REQUIRE_ACCOUNT_IN_CONFIG:
+        deps = get_dependencies()
+        allowed = deps.settings.get_accounts_usernames()
+        if not allowed:
+            logger.error(
+                "accounts_not_configured",
+                message="No hay cuentas configuradas en Settings",
+            )
+            raise InternalServerError(
+                "No hay cuentas configuradas para validar X-Account",
+                error_code="CONFIGURATION_ERROR",
+            )
+        if acc not in allowed:
+            raise ForbiddenError(
+                "Cuenta no autorizada",
+                details={"account": acc},
+            )
     return acc
 

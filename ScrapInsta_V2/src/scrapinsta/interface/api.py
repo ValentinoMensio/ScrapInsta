@@ -57,7 +57,11 @@ except Exception as e:
 
 
 # Middlewares extraídos a interface/middleware/
-from scrapinsta.interface.middleware import ObservabilityMiddleware, SecurityMiddleware
+from scrapinsta.interface.middleware import (
+    ObservabilityMiddleware,
+    SecurityMiddleware,
+    RequestSizeLimitMiddleware,
+)
 
 # Routers extraídos a interface/routers/
 from scrapinsta.interface.routers import (
@@ -189,6 +193,7 @@ _get_client_account = get_client_account
 # Si el app no tiene middlewares configurados, configurarlos ahora
 # (esto solo ocurre si no se usó el factory - caso edge/fallback)
 if not hasattr(app.state, '_configured'):
+    app.add_middleware(RequestSizeLimitMiddleware)
     app.add_middleware(ObservabilityMiddleware)
     app.add_middleware(SecurityMiddleware)
     
@@ -206,6 +211,12 @@ if not hasattr(app.state, '_configured'):
             max_age=3600,
         )
         logger.info("cors_enabled", origins=cors_origins)
+    else:
+        app_env = os.getenv("APP_ENV", "development").lower()
+        if app_env == "production":
+            logger.warning("cors_disabled_in_production", message="CORS sin orígenes en producción")
+        else:
+            logger.info("cors_disabled", message="CORS deshabilitado (ningún origen permitido)")
     
     # Registrar routers solo si no se configuraron en factory
     app.include_router(auth_router)

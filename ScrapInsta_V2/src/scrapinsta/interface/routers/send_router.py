@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from typing import List, Optional, Dict, Any
+import os
+import re
 from uuid import uuid4
 
 from fastapi import APIRouter, Header, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from scrapinsta.crosscutting.logging_config import get_logger, bind_request_context
 from scrapinsta.crosscutting.exceptions import BadRequestError, InternalServerError
@@ -15,6 +17,19 @@ from scrapinsta.interface.dependencies import get_dependencies
 logger = get_logger("routers.send")
 
 router = APIRouter(prefix="/api/send", tags=["send"])
+
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+MAX_PULL_LIMIT = int(os.getenv("MAX_PULL_LIMIT", "100"))
+MAX_USERNAME_LENGTH = int(os.getenv("MAX_USERNAME_LENGTH", "64"))
+MAX_ERROR_LENGTH = int(os.getenv("MAX_ERROR_LENGTH", "2000"))
+MAX_JOB_ID_LENGTH = int(os.getenv("MAX_JOB_ID_LENGTH", "64"))
+MAX_TASK_ID_LENGTH = int(os.getenv("MAX_TASK_ID_LENGTH", "160"))
+REQUIRE_JOB_ID_PREFIX = os.getenv(
+    "REQUIRE_JOB_ID_PREFIX",
+    "true" if APP_ENV == "production" else "false",
+).lower() in ("1", "true", "yes")
+JOB_ID_REGEX = r"^job:[a-f0-9]{32}$" if REQUIRE_JOB_ID_PREFIX else r"^.+$"
+USERNAME_REGEX = os.getenv("USERNAME_REGEX", r"^[a-zA-Z0-9._]{2,30}$")
 
 
 def _get_deps_from_request(request: Request):
@@ -40,12 +55,20 @@ class PullResponse(BaseModel):
 
 
 class ResultRequest(BaseModel):
-    job_id: str
-    task_id: str
+    job_id: str = Field(..., min_length=1, max_length=MAX_JOB_ID_LENGTH, pattern=JOB_ID_REGEX)
+    task_id: str = Field(..., min_length=1, max_length=MAX_TASK_ID_LENGTH)
     ok: bool
     error: Optional[str] = None
     # Para registrar el ledger cuando ok=true (evita SELECT extra)
     dest_username: Optional[str] = None
+
+    @field_validator("task_id")
+    @classmethod
+    def validate_task_id(cls, v: str, info):
+        job_id = info.data.get("job_id")
+        if REQUIRE_JOB_ID_PREFIX and job_id and not v.startswith(f"{job_id}:"):
+            raise ValueError("task_id debe comenzar con job_id")
+        return v
 
 
 @router.post("/pull", response_model=PullResponse)
@@ -80,6 +103,11 @@ def pull_tasks(
         account=account,
         limit=body.limit,
     )
+    if body.limit > MAX_PULL_LIMIT:
+        raise BadRequestError(
+            "limit excede el máximo permitido",
+            details={"limit": body.limit, "max": MAX_PULL_LIMIT},
+        )
 
     client_id = client.get("id")
     rows = deps.job_store.lease_tasks(account_id=account, limit=body.limit, client_id=client_id)
@@ -122,6 +150,18 @@ def post_result(
 
     # Marcar estado de la task
     try:
+        if body.error and len(body.error) > MAX_ERROR_LENGTH:
+            raise BadRequestError(
+                "error excede el tamaño permitido",
+                details={"max": MAX_ERROR_LENGTH},
+            )
+        if body.dest_username and len(body.dest_username.strip()) > MAX_USERNAME_LENGTH:
+            raise BadRequestError(
+                "dest_username excede el máximo permitido",
+                details={"max": MAX_USERNAME_LENGTH},
+            )
+        if body.dest_username and not re.match(USERNAME_REGEX, body.dest_username.strip().lower()):
+            raise BadRequestError("dest_username inválido")
         if body.ok:
             job_store.mark_task_ok(body.job_id, body.task_id, result=None)
         else:
