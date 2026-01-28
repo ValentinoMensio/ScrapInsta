@@ -4,14 +4,17 @@ Cliente Redis configurable con connection pooling y manejo de errores.
 from __future__ import annotations
 
 from typing import Optional
+import os
 from redis import Redis, ConnectionPool
 from redis.exceptions import RedisError, ConnectionError as RedisConnectionError
 
 from scrapinsta.config.settings import Settings
 from scrapinsta.crosscutting.logging_config import get_logger
+from scrapinsta.crosscutting.retry import retry, RetryError
 from scrapinsta.crosscutting.metrics import redis_connection_status
 
 logger = get_logger(__name__)
+REDIS_INIT_RETRIES = int(os.getenv("REDIS_INIT_RETRIES", "2"))
 
 _redis_client: Optional[Redis] = None
 _redis_pool: Optional[ConnectionPool] = None
@@ -35,6 +38,8 @@ def create_redis_pool(settings: Settings) -> Optional[ConnectionPool]:
                 max_connections=settings.redis_max_connections,
                 socket_timeout=settings.redis_socket_timeout,
                 socket_connect_timeout=settings.redis_socket_connect_timeout,
+                socket_keepalive=settings.redis_socket_keepalive,
+                health_check_interval=settings.redis_health_check_interval,
                 decode_responses=settings.redis_decode_responses,
             )
             logger.info("redis_pool_created", source="redis_url")
@@ -49,6 +54,8 @@ def create_redis_pool(settings: Settings) -> Optional[ConnectionPool]:
             max_connections=settings.redis_max_connections,
             socket_timeout=settings.redis_socket_timeout,
             socket_connect_timeout=settings.redis_socket_connect_timeout,
+            socket_keepalive=settings.redis_socket_keepalive,
+            health_check_interval=settings.redis_health_check_interval,
             decode_responses=settings.redis_decode_responses,
         )
         logger.info(
@@ -85,11 +92,19 @@ class RedisClient:
         
         try:
             self._client = Redis(connection_pool=self._pool)
-            # Test de conexión
-            self._client.ping()
+            # Test de conexión con reintentos
+            @retry((RedisConnectionError, RedisError), max_retries=REDIS_INIT_RETRIES)
+            def _ping() -> bool:
+                return self._client.ping()
+
+            _ping()
             self._enabled = True
             redis_connection_status.set(1)
             logger.info("redis_client_initialized", enabled=True)
+        except RetryError as e:
+            logger.warning("redis_connection_failed", error=str(e.last_error or e), enabled=False)
+            self._enabled = False
+            redis_connection_status.set(0)
         except RedisConnectionError as e:
             logger.warning("redis_connection_failed", error=str(e), enabled=False)
             self._enabled = False

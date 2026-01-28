@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     db_user: str = Field(default="app", env=["DB_USER"]) 
     db_pass: str = Field(default="app_password", env=["DB_PASS"]) 
     db_name: str = Field(default="scrapinsta", env=["DB_NAME"])
+    db_connect_timeout: float = Field(default=5.0, env=["DB_CONNECT_TIMEOUT"])
+    db_read_timeout: float = Field(default=10.0, env=["DB_READ_TIMEOUT"])
+    db_write_timeout: float = Field(default=10.0, env=["DB_WRITE_TIMEOUT"])
     
     def _load_secrets_from_manager(self) -> None:
         """
@@ -201,6 +204,8 @@ class Settings(BaseSettings):
     redis_socket_connect_timeout: float = Field(default=5.0, env="REDIS_SOCKET_CONNECT_TIMEOUT")
     redis_max_connections: int = Field(default=50, env="REDIS_MAX_CONNECTIONS")
     redis_decode_responses: bool = Field(default=True, env="REDIS_DECODE_RESPONSES")
+    redis_socket_keepalive: bool = Field(default=True, env="REDIS_SOCKET_KEEPALIVE")
+    redis_health_check_interval: int = Field(default=30, env="REDIS_HEALTH_CHECK_INTERVAL")
     
     # --- Redis Cache TTLs ---
     redis_cache_profile_ttl: int = Field(default=3600, env="REDIS_CACHE_PROFILE_TTL")  # 1 hora

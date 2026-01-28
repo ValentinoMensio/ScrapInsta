@@ -18,6 +18,7 @@ APP_ENV = os.getenv("APP_ENV", "development").lower()
 MAX_USERNAME_LENGTH = int(os.getenv("MAX_USERNAME_LENGTH", "64"))
 MAX_ANALYZE_MAX_REELS = int(os.getenv("MAX_ANALYZE_MAX_REELS", "12"))
 MAX_ANALYZE_MAX_POSTS = int(os.getenv("MAX_ANALYZE_MAX_POSTS", "30"))
+USERNAME_REGEX = os.getenv("USERNAME_REGEX", r"^[a-zA-Z0-9._]{2,30}$")
 
 
 class AnalyzeProfileRequest(BaseModel):
@@ -38,7 +39,7 @@ class AnalyzeProfileRequest(BaseModel):
         v = v.strip()
         if v.startswith("@"):
             v = v[1:]
-        if not re.match(r'^[a-zA-Z0-9._]{2,30}$', v):
+        if not re.match(USERNAME_REGEX, v):
             raise ValueError("Username inválido para Instagram (solo a-z, 0-9, ., _)")
         if len(v) > MAX_USERNAME_LENGTH:
             raise ValueError("username excede el máximo permitido")

@@ -5,13 +5,21 @@ Implementa token bucket algorithm distribuido.
 from __future__ import annotations
 
 import time
+import os
 from typing import Optional
 from redis import Redis
 from redis.exceptions import RedisError
 
 from scrapinsta.crosscutting.logging_config import get_logger
+from scrapinsta.crosscutting.retry import retry, RetryError
 
 logger = get_logger(__name__)
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+REDIS_RATE_LIMIT_RETRIES = int(os.getenv("REDIS_RATE_LIMIT_RETRIES", "1"))
+FAIL_CLOSED_ON_REDIS_ERROR = os.getenv(
+    "FAIL_CLOSED_ON_REDIS_ERROR",
+    "true" if APP_ENV == "production" else "false",
+).lower() in ("1", "true", "yes")
 
 
 class DistributedRateLimiter:
@@ -67,9 +75,20 @@ class DistributedRateLimiter:
             return True, 0.0
         
         try:
-            return self._allow_redis(key, rpm, period_seconds)
+            @retry((RedisError,), max_retries=REDIS_RATE_LIMIT_RETRIES)
+            def _allow_retry() -> tuple[bool, float]:
+                return self._allow_redis(key, rpm, period_seconds)
+
+            return _allow_retry()
+        except RetryError as e:
+            logger.warning("redis_rate_limit_error", key=key, error=str(e.last_error or e))
+            if FAIL_CLOSED_ON_REDIS_ERROR:
+                return False, float(period_seconds)
+            return True, 0.0
         except RedisError as e:
             logger.warning("redis_rate_limit_error", key=key, error=str(e))
+            if FAIL_CLOSED_ON_REDIS_ERROR:
+                return False, float(period_seconds)
             # Fallback: permitir si Redis falla
             return True, 0.0
         except Exception as e:

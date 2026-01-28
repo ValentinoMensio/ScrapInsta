@@ -5,6 +5,8 @@ from typing import Callable, Optional, Dict, Any
 from urllib.parse import urlparse, unquote
 import pymysql
 
+from scrapinsta.crosscutting.retry import retry, RetryError
+
 from scrapinsta.config.settings import Settings
 
 
@@ -47,12 +49,17 @@ def _normalize_params(dsn_or_settings: Optional[str | Settings]) -> Dict[str, An
     """
     Si viene un DSN válido lo parsea; si no, toma datos de Settings.
     """
+    s = dsn_or_settings if isinstance(dsn_or_settings, Settings) else Settings()
     if isinstance(dsn_or_settings, str) and dsn_or_settings.strip():
         p = _parse_mysql_dsn(dsn_or_settings.strip())
         if p:
-            return p
+            return {
+                **p,
+                "connect_timeout": float(s.db_connect_timeout),
+                "read_timeout": float(s.db_read_timeout),
+                "write_timeout": float(s.db_write_timeout),
+            }
 
-    s = dsn_or_settings if isinstance(dsn_or_settings, Settings) else Settings()
     return {
         "host": s.db_host,
         "port": int(s.db_port),
@@ -60,20 +67,35 @@ def _normalize_params(dsn_or_settings: Optional[str | Settings]) -> Dict[str, An
         "password": s.db_pass,
         "db": s.db_name,
         "charset": "utf8mb4",
+        "connect_timeout": float(s.db_connect_timeout),
+        "read_timeout": float(s.db_read_timeout),
+        "write_timeout": float(s.db_write_timeout),
     }
 
 
 def _connect(params: Dict[str, Any]):
-    return pymysql.connect(
-        host=params["host"],
-        port=int(params["port"]),
-        user=params["user"],
-        password=params["password"],
-        database=params["db"],
-        charset=params["charset"],
-        autocommit=True,
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    retries = int(os.getenv("DB_CONNECT_RETRIES", "2"))
+
+    @retry((pymysql.err.OperationalError, pymysql.err.InterfaceError), max_retries=retries)
+    def _connect_retry():
+        return pymysql.connect(
+            host=params["host"],
+            port=int(params["port"]),
+            user=params["user"],
+            password=params["password"],
+            database=params["db"],
+            charset=params["charset"],
+            connect_timeout=float(params.get("connect_timeout", 5.0)),
+            read_timeout=float(params.get("read_timeout", 10.0)),
+            write_timeout=float(params.get("write_timeout", 10.0)),
+            autocommit=True,
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+
+    try:
+        return _connect_retry()
+    except RetryError as e:
+        raise e.last_error or e
 
 
 class ConnectionProvider:

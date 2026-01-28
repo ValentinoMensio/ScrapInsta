@@ -7,6 +7,7 @@ facilitando testing y configuración dinámica.
 from __future__ import annotations
 
 from typing import Optional
+import os
 from passlib.context import CryptContext
 
 from scrapinsta.config.settings import Settings
@@ -18,6 +19,12 @@ from scrapinsta.infrastructure.redis import RedisClient, DistributedRateLimiter
 from scrapinsta.crosscutting.logging_config import get_logger
 
 logger = get_logger("dependencies")
+
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+REQUIRE_REDIS_RATE_LIMITER = os.getenv(
+    "REQUIRE_REDIS_RATE_LIMITER",
+    "true" if APP_ENV == "production" else "false",
+).lower() in ("1", "true", "yes")
 
 
 class Dependencies:
@@ -94,6 +101,8 @@ class Dependencies:
         if self._distributed_rate_limiter is None:
             self._distributed_rate_limiter = DistributedRateLimiter(self.redis_client)
             if not self._distributed_rate_limiter.enabled:
+                if REQUIRE_REDIS_RATE_LIMITER:
+                    raise RuntimeError("Redis requerido para rate limiting en producción")
                 logger.warning("redis_unavailable", fallback="memory_rate_limiter")
         return self._distributed_rate_limiter
     

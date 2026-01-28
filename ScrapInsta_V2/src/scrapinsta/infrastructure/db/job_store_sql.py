@@ -9,6 +9,8 @@ from urllib.parse import urlparse, unquote
 
 import pymysql  # pip install PyMySQL
 
+from scrapinsta.crosscutting.retry import retry, RetryError
+
 from scrapinsta.domain.ports.job_store import JobStorePort
 from scrapinsta.crosscutting.metrics import (
     db_queries_total,
@@ -73,6 +75,9 @@ class JobStoreSQL(JobStorePort):
                         ssl_params.update({"cert": cert, "key": key})
             except Exception:
                 ssl_params = None
+            connect_timeout = float(os.getenv("DB_CONNECT_TIMEOUT", "5.0"))
+            read_timeout = float(os.getenv("DB_READ_TIMEOUT", "10.0"))
+            write_timeout = float(os.getenv("DB_WRITE_TIMEOUT", "10.0"))
             return pymysql.connect(
                 host=host,
                 port=int(port),
@@ -80,10 +85,19 @@ class JobStoreSQL(JobStorePort):
                 password=pwd,
                 database=db,
                 charset="utf8mb4",
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
+                write_timeout=write_timeout,
                 autocommit=False,
                 cursorclass=pymysql.cursors.DictCursor,
                 ssl=ssl_params,
             )
+
+        retries = int(os.getenv("DB_CONNECT_RETRIES", "2"))
+
+        @retry((pymysql.err.OperationalError, pymysql.err.InterfaceError), max_retries=retries)
+        def _new_conn_retry() -> pymysql.connections.Connection:
+            return _new_conn()
 
         # Reusar una conexión del pool si hay
         try:
@@ -109,7 +123,10 @@ class JobStoreSQL(JobStorePort):
                     break
 
         # Devolver una conexión nueva
-        con = _new_conn()
+        try:
+            con = _new_conn_retry()
+        except RetryError as e:
+            raise e.last_error or e
         db_connections_active.set(self._pool.qsize() + 1)
         return con
 
