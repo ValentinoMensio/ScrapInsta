@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import threading
 from queue import Queue, Empty
 import os
+from urllib.parse import urlparse, unquote
 
 import pymysql  # pip install PyMySQL
 
@@ -49,20 +50,17 @@ class JobStoreSQL(JobStorePort):
     # -----------------------
     def _connect(self):
         """Obtiene una conexión del pool o crea una nueva si hace falta."""
-        # Parse DSN simple: mysql://user:pass@host:port/db?charset=utf8mb4
-        assert self._dsn.startswith("mysql://")
-        tail = self._dsn[len("mysql://") :]
-        cred, rest = tail.split("@", 1)
-        user, pwd = cred.split(":", 1)
-        hostport, dbq = rest.split("/", 1)
-        if ":" in hostport:
-            host, port = hostport.split(":")
-        else:
-            host, port = hostport, "3307"
-        if "?" in dbq:
-            db, _q = dbq.split("?", 1)
-        else:
-            db = dbq
+        # Parse DSN con urllib.parse para mayor robustez.
+        parsed = urlparse(self._dsn)
+        if parsed.scheme != "mysql":
+            raise ValueError("DSN inválido: esquema esperado 'mysql'")
+        user = unquote(parsed.username or "")
+        pwd = unquote(parsed.password or "")
+        host = parsed.hostname or ""
+        port = int(parsed.port or 3307)
+        db = (parsed.path or "").lstrip("/")
+        if not host or not db:
+            raise ValueError("DSN inválido: host y db son requeridos")
         def _new_conn() -> pymysql.connections.Connection:
             ssl_params = None
             try:

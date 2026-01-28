@@ -1,30 +1,42 @@
 from __future__ import annotations
 from typing import Dict, Any
 
+ENGAGEMENT_FOLLOWER_BUCKETS = (
+    (5_000, 0.0608),
+    (20_000, 0.048),
+    (100_000, 0.051),
+    (1_000_000, 0.0378),
+)
+ENGAGEMENT_BENCHMARK_DEFAULT = 0.0266
+
+VIEWS_FOLLOWER_BUCKETS = (
+    (5_000, 0.20),
+    (10_000, 0.102),
+    (50_000, 0.08),
+    (100_000, 0.05),
+)
+VIEWS_BENCHMARK_DEFAULT = 0.04
+
+ENGAGEMENT_SCORE_MAX = 1.0
+SUCCESS_WEIGHT_ENGAGEMENT = 0.5
+SUCCESS_WEIGHT_VIEWS = 0.3
+SUCCESS_WEIGHT_POSTS = 0.2
+POSTS_PER_MONTH_DAYS = 30.0
+POSTS_PER_MONTH_NORMALIZER = 12.0
+SCORE_ROUND_DIGITS = 6
+
 # ---------- Benchmarks ----------
 def get_engagement_benchmark(followers: int) -> float:
-    if followers < 5_000:
-        return 0.0608
-    elif followers < 20_000:
-        return 0.048
-    elif followers < 100_000:
-        return 0.051
-    elif followers < 1_000_000:
-        return 0.0378
-    else:
-        return 0.0266
+    for limit, value in ENGAGEMENT_FOLLOWER_BUCKETS:
+        if followers < limit:
+            return value
+    return ENGAGEMENT_BENCHMARK_DEFAULT
 
 def get_views_benchmark(followers: int) -> float:
-    if followers < 5_000:
-        return 0.20
-    elif followers < 10_000:
-        return 0.102
-    elif followers < 50_000:
-        return 0.08
-    elif followers < 100_000:
-        return 0.05
-    else:
-        return 0.04
+    for limit, value in VIEWS_FOLLOWER_BUCKETS:
+        if followers < limit:
+            return value
+    return VIEWS_BENCHMARK_DEFAULT
 
 # ---------- Normalización/compat ----------
 def _normalize_payload(p: Dict[str, Any]) -> Dict[str, Any]:
@@ -58,8 +70,8 @@ def calculate_engagement_score(profile: Dict[str, Any]) -> float:
         return 0.0
     actual_engagement = (avg_likes + avg_comments) / followers
     expected_engagement = get_engagement_benchmark(followers)
-    score = min(actual_engagement / expected_engagement, 1.0)
-    return round(score, 6)
+    score = min(actual_engagement / expected_engagement, ENGAGEMENT_SCORE_MAX)
+    return round(score, SCORE_ROUND_DIGITS)
 
 def calculate_success_score(profile: Dict[str, Any]) -> float:
     followers = int(profile.get("followers") or 0)
@@ -72,14 +84,18 @@ def calculate_success_score(profile: Dict[str, Any]) -> float:
 
     engagement = (avg_likes + avg_comments) / followers
     views_rate = avg_views / followers
-    post_month = posts / 30.0
+    post_month = posts / POSTS_PER_MONTH_DAYS
 
-    norm_engagement = min(engagement / get_engagement_benchmark(followers), 1.0)
-    norm_views = min(views_rate / get_views_benchmark(followers), 1.0)
-    norm_post = min(post_month / 12.0, 1.0)
+    norm_engagement = min(engagement / get_engagement_benchmark(followers), ENGAGEMENT_SCORE_MAX)
+    norm_views = min(views_rate / get_views_benchmark(followers), ENGAGEMENT_SCORE_MAX)
+    norm_post = min(post_month / POSTS_PER_MONTH_NORMALIZER, ENGAGEMENT_SCORE_MAX)
 
-    score = 0.5 * norm_engagement + 0.3 * norm_views + 0.2 * norm_post
-    return round(score, 6)
+    score = (
+        SUCCESS_WEIGHT_ENGAGEMENT * norm_engagement
+        + SUCCESS_WEIGHT_VIEWS * norm_views
+        + SUCCESS_WEIGHT_POSTS * norm_post
+    )
+    return round(score, SCORE_ROUND_DIGITS)
 
 def evaluate_profile(profile: Dict[str, Any]) -> Dict[str, float] | None:
     p = _normalize_payload(profile)

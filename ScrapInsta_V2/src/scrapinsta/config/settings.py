@@ -60,6 +60,46 @@ class AccountsView(BaseModel):
     items: List[AccountConfig]
 
 
+class DBSettings(BaseModel):
+    host: str
+    port: int
+    user: str
+    password: str
+    name: str
+
+    @property
+    def dsn(self) -> str:
+        user = quote_plus(self.user)
+        pwd = quote_plus(self.password)
+        return f"mysql://{user}:{pwd}@{self.host}:{self.port}/{self.name}?charset=utf8mb4"
+
+
+class SecuritySettings(BaseModel):
+    secrets_provider: Optional[str]
+    encryption_key: Optional[str]
+    enable_encrypted_passwords: bool
+
+
+class WorkerSettings(BaseModel):
+    queues_backend: str
+    queue_maxsize: int
+    worker_max_inflight_per_account: int
+    worker_tokens_capacity: int
+    worker_tokens_refill_per_sec: float
+    worker_max_backoff_s: float
+    worker_base_backoff_s: float
+    worker_jitter_s: float
+    worker_aging_step: float
+    worker_aging_cap: float
+    worker_load_balance_weight: float
+    worker_token_availability_weight: float
+    worker_urgency_weight: float
+    worker_default_batch_size: int
+    sqs_task_queue_url: Optional[str]
+    sqs_result_queue_url: Optional[str]
+    aws_region: Optional[str]
+
+
 # -----------------------------
 # Settings principal
 # -----------------------------
@@ -173,6 +213,12 @@ class Settings(BaseSettings):
     
     # Instancia de PasswordDecryptor (se inicializa después de la validación)
     _password_decryptor: Optional[PasswordDecryptor] = None
+    _accounts_cache: Optional[List[AccountConfig]] = None
+    _accounts_view_cache: Optional[AccountsView] = None
+    _accounts_index_cache: Optional[Dict[str, AccountConfig]] = None
+    _db_settings_cache: Optional[DBSettings] = None
+    _security_settings_cache: Optional[SecuritySettings] = None
+    _worker_settings_cache: Optional[WorkerSettings] = None
 
     @model_validator(mode='after')
     def _load_secrets_after_init(self):
@@ -185,6 +231,7 @@ class Settings(BaseSettings):
         
         # Cargar secretos desde gestor
         self._load_secrets_from_manager()
+        self._reset_accounts_cache()
         return self
 
     # ---------- Helpers de cuentas ----------
@@ -294,6 +341,11 @@ class Settings(BaseSettings):
         
         return []
 
+    def _reset_accounts_cache(self) -> None:
+        self._accounts_cache = None
+        self._accounts_view_cache = None
+        self._accounts_index_cache = None
+
     def _build_accounts(self) -> List[AccountConfig]:
         raw_list = self._load_accounts_payload()
         if not raw_list:
@@ -312,14 +364,26 @@ class Settings(BaseSettings):
             raise ValueError("Errores en configuración de cuentas:\n- " + "\n- ".join(errors))
         return valid
 
+    def _get_accounts_cached(self) -> List[AccountConfig]:
+        if self._accounts_cache is None:
+            self._accounts_cache = self._build_accounts()
+        return self._accounts_cache
+
+    def _get_accounts_index(self) -> Dict[str, AccountConfig]:
+        if self._accounts_index_cache is None:
+            self._accounts_index_cache = {acc.username: acc for acc in self._get_accounts_cached()}
+        return self._accounts_index_cache
+
     # ---------- API pública ----------
     model_config = SettingsConfigDict(case_sensitive=False)
     @property
     def accounts_view(self) -> AccountsView:
-        return AccountsView(items=self._build_accounts())
+        if self._accounts_view_cache is None:
+            self._accounts_view_cache = AccountsView(items=self._get_accounts_cached())
+        return self._accounts_view_cache
 
     def get_accounts(self) -> List[AccountConfig]:
-        return self.accounts_view.items
+        return self._get_accounts_cached()
 
     def get_accounts_usernames(self) -> List[str]:
         return [a.username for a in self.get_accounts()]
@@ -327,15 +391,13 @@ class Settings(BaseSettings):
     def get_account_password(self, username: str) -> Optional[str]:
         if not username:
             return None
-        index = {acc.username: acc for acc in self.get_accounts()}
-        acc = index.get(username.strip().lower())
+        acc = self._get_accounts_index().get(username.strip().lower())
         return acc.password if acc else None
 
     def get_account_proxy(self, username: str) -> Optional[str]:
         if not username:
             return None
-        index = {acc.username: acc for acc in self.get_accounts()}
-        acc = index.get(username.strip().lower())
+        acc = self._get_accounts_index().get(username.strip().lower())
         return acc.proxy if acc else None
 
     def get_data_dir(self) -> Path:
@@ -359,12 +421,53 @@ class Settings(BaseSettings):
         Formato compatible con PyMySQL / mysqlclient:
           mysql://user:pass@host:port/dbname?charset=utf8mb4
         """
-        user = quote_plus(self.db_user)
-        pwd = quote_plus(self.db_pass)
-        host = self.db_host
-        port = self.db_port
-        db   = self.db_name
-        return f"mysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8mb4"
+        return self.db.dsn
+
+    @property
+    def db(self) -> DBSettings:
+        if self._db_settings_cache is None:
+            self._db_settings_cache = DBSettings(
+                host=self.db_host,
+                port=self.db_port,
+                user=self.db_user,
+                password=self.db_pass,
+                name=self.db_name,
+            )
+        return self._db_settings_cache
+
+    @property
+    def security(self) -> SecuritySettings:
+        if self._security_settings_cache is None:
+            self._security_settings_cache = SecuritySettings(
+                secrets_provider=self.secrets_provider,
+                encryption_key=self.encryption_key,
+                enable_encrypted_passwords=self.enable_encrypted_passwords,
+            )
+        return self._security_settings_cache
+
+    @property
+    def worker(self) -> WorkerSettings:
+        if self._worker_settings_cache is None:
+            self._worker_settings_cache = WorkerSettings(
+                queues_backend=self.queues_backend,
+                queue_maxsize=self.queue_maxsize,
+                worker_max_inflight_per_account=self.worker_max_inflight_per_account,
+                worker_tokens_capacity=self.worker_tokens_capacity,
+                worker_tokens_refill_per_sec=self.worker_tokens_refill_per_sec,
+                worker_max_backoff_s=self.worker_max_backoff_s,
+                worker_base_backoff_s=self.worker_base_backoff_s,
+                worker_jitter_s=self.worker_jitter_s,
+                worker_aging_step=self.worker_aging_step,
+                worker_aging_cap=self.worker_aging_cap,
+                worker_load_balance_weight=self.worker_load_balance_weight,
+                worker_token_availability_weight=self.worker_token_availability_weight,
+                worker_urgency_weight=self.worker_urgency_weight,
+                worker_default_batch_size=self.worker_default_batch_size,
+                sqs_task_queue_url=self.sqs_task_queue_url,
+                sqs_result_queue_url=self.sqs_result_queue_url,
+                aws_region=self.aws_region,
+            )
+        return self._worker_settings_cache
     
     def get_router_config(self) -> Any:
         """
