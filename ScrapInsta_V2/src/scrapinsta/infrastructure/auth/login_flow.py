@@ -18,12 +18,24 @@ from scrapinsta.domain.ports.browser_port import BrowserAuthError
 from scrapinsta.crosscutting.logging_config import get_logger
 
 try:
-    from scrapinsta.crosscutting.human.tempo import sleep_jitter as _hsleep
+    from scrapinsta.crosscutting.human.tempo import sleep_jitter as _hsleep, HumanScheduler
 except Exception:
+    class HumanScheduler:  # type: ignore[no-redef]
+        def wait_turn(self) -> None:
+            return None
     def _hsleep(a: float, b: float) -> None:
         time.sleep(max(0.0, (a + b) / 2.0))
 
 log = get_logger("login_flow")
+
+
+def _maybe_wait(scheduler: Optional[HumanScheduler]) -> None:
+    if scheduler is None:
+        return
+    try:
+        scheduler.wait_turn()
+    except Exception:
+        pass
 
 
 # ---------------------------
@@ -37,7 +49,12 @@ def _clean_text(s: str, max_len: int = 220) -> str:
     return compact if len(compact) <= max_len else compact[: max_len - 1] + "…"
 
 
-def _accept_cookies_banner(driver: WebDriver, timeout: int = 8) -> None:
+def _accept_cookies_banner(
+    driver: WebDriver,
+    *,
+    scheduler: Optional[HumanScheduler] = None,
+    timeout: int = 8,
+) -> None:
     """Cierra banner de cookies si está (no loggea ruido)."""
     try:
         el = WebDriverWait(driver, timeout).until(
@@ -47,6 +64,7 @@ def _accept_cookies_banner(driver: WebDriver, timeout: int = 8) -> None:
                 EC.element_to_be_clickable((By.XPATH, "//button[normalize-space()='Allow essential and optional cookies']")),
             )
         )
+        _maybe_wait(scheduler)
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
         _hsleep(0.2, 0.4)
         el.click()
@@ -107,7 +125,12 @@ def _is_logged_in(driver: WebDriver, timeout: int = 12) -> bool:
         return False
 
 
-def _handle_save_login_info_popup(driver: WebDriver, timeout: int = 6) -> None:
+def _handle_save_login_info_popup(
+    driver: WebDriver,
+    *,
+    scheduler: Optional[HumanScheduler] = None,
+    timeout: int = 6,
+) -> None:
     """Descarta popup 'Guardar información de inicio de sesión' si aparece."""
     try:
         btn = WebDriverWait(driver, timeout).until(
@@ -116,6 +139,7 @@ def _handle_save_login_info_popup(driver: WebDriver, timeout: int = 6) -> None:
                 EC.element_to_be_clickable((By.XPATH, "//div[@role='dialog']//button[normalize-space()='Ahora no']")),
             )
         )
+        _maybe_wait(scheduler)
         btn.click()
         log.debug("auth_save_login_info_popup_dismissed")
         _hsleep(0.4, 0.8)
@@ -130,12 +154,13 @@ def _type_slow(el, text: str, min_pause: float = 0.045, max_pause: float = 0.11)
         time.sleep(random.uniform(min_pause, max_pause))
 
 
-def _paste_text(el, text: str) -> None:
+def _paste_text(el, text: str, *, scheduler: Optional[HumanScheduler] = None) -> None:
     """
     Simula copiar y pegar: selecciona todo el contenido del campo (Ctrl+A)
     y luego escribe el texto completo de una vez (simula Ctrl+V).
     Más rápido y más realista que escribir carácter por carácter.
     """
+    _maybe_wait(scheduler)
     el.click()
     _hsleep(0.05, 0.12)
     
@@ -194,7 +219,12 @@ def _locate_inputs(driver: WebDriver, wait_s: int) -> Tuple:
     return user_input, pass_input
 
 
-def _click_submit_strict(driver: WebDriver, wait_s: int) -> None:
+def _click_submit_strict(
+    driver: WebDriver,
+    *,
+    wait_s: int,
+    scheduler: Optional[HumanScheduler] = None,
+) -> None:
     """
     Plan A — Estilo viejo (que te funcionaba): botón submit simple.
     """
@@ -202,6 +232,7 @@ def _click_submit_strict(driver: WebDriver, wait_s: int) -> None:
     # 1) Botón submit clásico
     try:
         btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@type='submit']")))
+        _maybe_wait(scheduler)
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
         _hsleep(0.15, 0.3)
         btn.click()
@@ -218,12 +249,19 @@ def _click_submit_strict(driver: WebDriver, wait_s: int) -> None:
             )
         )
     )
+    _maybe_wait(scheduler)
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
     _hsleep(0.15, 0.3)
     btn.click()
 
 
-def _click_submit_fallbacks(driver: WebDriver, password_input, login_url: str) -> None:
+def _click_submit_fallbacks(
+    driver: WebDriver,
+    password_input,
+    login_url: str,
+    *,
+    scheduler: Optional[HumanScheduler] = None,
+) -> None:
     """
     Plan B/C — Fallbacks si el click 'viejo' no dispara el flujo:
       - Variantes de botón.
@@ -241,6 +279,7 @@ def _click_submit_fallbacks(driver: WebDriver, password_input, login_url: str) -
     for by, sel in selectors:
         try:
             btn = WebDriverWait(driver, 6).until(EC.element_to_be_clickable((by, sel)))
+            _maybe_wait(scheduler)
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
             _hsleep(0.12, 0.25)
             btn.click()
@@ -251,6 +290,7 @@ def _click_submit_fallbacks(driver: WebDriver, password_input, login_url: str) -
 
     if not tried:
         try:
+            _maybe_wait(scheduler)
             password_input.send_keys(Keys.ENTER)
             tried = True
         except Exception:
@@ -258,6 +298,7 @@ def _click_submit_fallbacks(driver: WebDriver, password_input, login_url: str) -
     if not tried:
         try:
             btn = driver.find_element(By.XPATH, "//button[@type='submit']")
+            _maybe_wait(scheduler)
             driver.execute_script("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();", btn)
         except Exception:
             pass
@@ -286,6 +327,7 @@ def login_instagram(
     login_url: str = "https://www.instagram.com/accounts/login/",
     two_factor_code_provider: Optional[Callable[[], str]] = None,
     wait_s: int = 25,
+    scheduler: Optional[HumanScheduler] = None,
 ) -> None:
     """
     Login robusto que prioriza la forma de tocar la UI de la versión vieja (plan A)
@@ -301,27 +343,28 @@ def login_instagram(
     success = False
 
     try:
+        _maybe_wait(scheduler)
         driver.get(login_url)
         log.debug("auth_nav_login_url", url=login_url)
         _hsleep(1.0, 2.0)
-        _accept_cookies_banner(driver)
+        _accept_cookies_banner(driver, scheduler=scheduler)
 
         user_input, pass_input = _locate_inputs(driver, wait_s)
         log.debug("auth_login_inputs_located")
         user_input.clear(); pass_input.clear()
-        _paste_text(user_input, username)
+        _paste_text(user_input, username, scheduler=scheduler)
         _hsleep(0.15, 0.3)
-        _paste_text(pass_input, password)
+        _paste_text(pass_input, password, scheduler=scheduler)
         _hsleep(0.15, 0.3)
 
         submit_attempts = 3
         for attempt in range(1, submit_attempts + 1):
             log.debug("auth_submit_try", attempt=attempt, max_attempts=submit_attempts, plan="A")
             try:
-                _click_submit_strict(driver, wait_s=8)
+                _click_submit_strict(driver, wait_s=8, scheduler=scheduler)
             except Exception as e:
                 log.debug("auth_submit_plan_a_failed_fallback", error=str(e))
-                _click_submit_fallbacks(driver, pass_input, login_url)
+                _click_submit_fallbacks(driver, pass_input, login_url, scheduler=scheduler)
 
             _hsleep(0.6, 1.0)
             try:
@@ -360,6 +403,7 @@ def login_instagram(
                 code = (two_factor_code_provider() or "").strip()
                 if not code:
                     raise BrowserAuthError("Código 2FA vacío", username=username)
+                _maybe_wait(scheduler)
                 challenge.clear()
                 for ch in code:
                     challenge.send_keys(ch)
@@ -372,7 +416,8 @@ def login_instagram(
         except TimeoutException:
             log.debug("auth_two_factor_not_detected")
 
-        _handle_save_login_info_popup(driver)
+        _handle_save_login_info_popup(driver, scheduler=scheduler)
+        _maybe_wait(scheduler)
         driver.get(base_url)
         log.debug("auth_nav_base_url_for_verification", url=base_url)
 

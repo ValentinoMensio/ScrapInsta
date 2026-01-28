@@ -61,6 +61,9 @@ def type_message(driver: WebDriver, text: str, timeout: float = 10.0) -> None:
             area.click()
             sleep_jitter(0.25, 0.2)
             area.send_keys(text)
+            length = max(1, len(text))
+            base = min(0.8 + (length * 0.02), 4.5)
+            sleep_jitter(base, 0.4)
             return
         except TimeoutException:
             continue

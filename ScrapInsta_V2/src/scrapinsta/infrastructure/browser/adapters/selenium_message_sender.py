@@ -173,6 +173,7 @@ class SeleniumMessageSender(MessageSenderPort):
         ta.click()
         sleep_jitter(self._small_pause, self._small_jitter)
         ta.send_keys(text)
+        self._sleep_after_typing(text)
 
     def _send_action(self) -> None:
         """Prioriza: profile_page.send_message(driver). Fallback: botón 'Send' o ENTER."""
@@ -219,3 +220,8 @@ class SeleniumMessageSender(MessageSenderPort):
 
     def _sleep_short(self) -> None:
         sleep_jitter(self._small_pause, self._small_jitter)
+
+    def _sleep_after_typing(self, text: str) -> None:
+        length = max(1, len(text))
+        base = min(0.8 + (length * 0.02), 4.5)
+        sleep_jitter(base, 0.4)

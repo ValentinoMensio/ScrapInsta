@@ -15,6 +15,7 @@ from selenium.common.exceptions import (
     TimeoutException,
 )
 from scrapinsta.domain.models.profile_models import ProfileSnapshot
+from scrapinsta.crosscutting.human.tempo import HumanScheduler
 
 
 from scrapinsta.crosscutting.parse import parse_number, extract_number
@@ -56,7 +57,12 @@ def _find_first_text(driver: WebDriver, selectors: list[tuple[By, str]], timeout
 # Extracción de campos puntuales
 # ---------------------------------------------------------------------------
 
-def close_instagram_login_popup(driver: WebDriver, timeout: int = 5) -> bool:
+def close_instagram_login_popup(
+    driver: WebDriver,
+    *,
+    scheduler: Optional[HumanScheduler] = None,
+    timeout: int = 5,
+) -> bool:
     try:
         btn = WebDriverWait(driver, timeout).until(
             EC.presence_of_element_located((
@@ -66,6 +72,11 @@ def close_instagram_login_popup(driver: WebDriver, timeout: int = 5) -> bool:
                 "/ancestor::div[@role='button' or @tabindex='0']"
             ))
         )
+        if scheduler is not None:
+            try:
+                scheduler.wait_turn()
+            except Exception:
+                pass
         btn.click()
         return True
     except (NoSuchElementException, ElementClickInterceptedException, TimeoutException):

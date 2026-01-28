@@ -10,7 +10,7 @@ from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel, Field, field_validator
 
 from scrapinsta.crosscutting.logging_config import get_logger, bind_request_context
-from scrapinsta.crosscutting.exceptions import BadRequestError, InternalServerError
+from scrapinsta.crosscutting.exceptions import BadRequestError, InternalServerError, RateLimitError
 from scrapinsta.interface.auth import authenticate_client, check_scope, enforce_https, get_client_account, rate_limit
 from scrapinsta.interface.dependencies import get_dependencies
 
@@ -24,6 +24,20 @@ MAX_USERNAME_LENGTH = int(os.getenv("MAX_USERNAME_LENGTH", "64"))
 MAX_ERROR_LENGTH = int(os.getenv("MAX_ERROR_LENGTH", "2000"))
 MAX_JOB_ID_LENGTH = int(os.getenv("MAX_JOB_ID_LENGTH", "64"))
 MAX_TASK_ID_LENGTH = int(os.getenv("MAX_TASK_ID_LENGTH", "160"))
+MAX_CLIENT_MESSAGES_PER_DAY = int(os.getenv("MAX_CLIENT_MESSAGES_PER_DAY", "100"))
+
+
+def _safe_int(value, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        return int(value)
+    except Exception:
+        return default
 REQUIRE_JOB_ID_PREFIX = os.getenv(
     "REQUIRE_JOB_ID_PREFIX",
     "true" if APP_ENV == "production" else "false",
@@ -110,7 +124,27 @@ def pull_tasks(
         )
 
     client_id = client.get("id")
-    rows = deps.job_store.lease_tasks(account_id=account, limit=body.limit, client_id=client_id)
+    limits = deps.client_repo.get_limits(client_id) or {}
+    daily_limit = _safe_int(limits.get("messages_per_day", MAX_CLIENT_MESSAGES_PER_DAY), MAX_CLIENT_MESSAGES_PER_DAY)
+    if daily_limit > 0:
+        sent_ok_today = _safe_int(deps.job_store.count_messages_sent_today(client_id), 0)
+        sent_inflight_today = _safe_int(deps.job_store.count_tasks_sent_today(client_id), 0)
+        used_today = sent_ok_today + sent_inflight_today
+        remaining = daily_limit - used_today
+        if remaining <= 0:
+            raise RateLimitError(
+                "Límite diario de mensajes alcanzado",
+                details={
+                    "client_id": client_id,
+                    "limit": daily_limit,
+                    "sent_ok_today": sent_ok_today,
+                    "sent_inflight_today": sent_inflight_today,
+                },
+            )
+        effective_limit = min(body.limit, remaining)
+    else:
+        effective_limit = body.limit
+    rows = deps.job_store.lease_tasks(account_id=account, limit=effective_limit, client_id=client_id)
 
     items: List[PulledTask] = []
     for r in rows:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Optional, Tuple
 
 from seleniumwire.undetected_chromedriver.v2 import ChromeOptions
@@ -23,6 +24,9 @@ def build_chrome_options(
     No lanza efectos colaterales; sólo prepara objetos de construcción.
     """
     opts = ChromeOptions()
+    default_window_size = os.getenv("WINDOW_SIZE", "1200x800")
+    if "x" in default_window_size:
+        default_window_size = default_window_size.replace("x", ",")
     flags = [
         "--no-sandbox",
         "--disable-dev-shm-usage",
@@ -37,7 +41,7 @@ def build_chrome_options(
         "--no-default-browser-check",
         "--disable-features=TranslateUI,AutomationControlled",
         "--ignore-certificate-errors",
-        "--window-size=1200,800",
+        f"--window-size={default_window_size}",
     ]
     if headless:
         flags.append("--headless=new")

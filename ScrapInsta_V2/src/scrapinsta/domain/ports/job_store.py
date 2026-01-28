@@ -176,6 +176,14 @@ class JobStorePort(Protocol):
         """Retorna True si cualquier cliente ya envió un mensaje al destino."""
         ...
 
+    def count_messages_sent_today(self, client_id: str) -> int:
+        """Cuenta mensajes enviados hoy por client_id."""
+        ...
+
+    def count_tasks_sent_today(self, client_id: str) -> int:
+        """Cuenta tareas en estado 'sent' hoy por client_id (en vuelo)."""
+        ...
+
     def register_message_sent(
         self,
         client_username: str,

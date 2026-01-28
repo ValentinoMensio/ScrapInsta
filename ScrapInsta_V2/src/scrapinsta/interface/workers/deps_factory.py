@@ -1,8 +1,10 @@
 from __future__ import annotations
 from typing import Optional, Dict
+import os
 
 from scrapinsta.config.settings import Settings
 from scrapinsta.crosscutting.logging_config import get_logger
+from scrapinsta.crosscutting.human.tempo import HumanScheduler, HumanTempoConfig
 
 from selenium.common.exceptions import WebDriverException, InvalidSessionIdException
 
@@ -66,6 +68,8 @@ class FactoryImpl(UseCaseFactory):
         self._followings_repo: Optional[FollowingsRepo] = None
         self._sender: Optional[MessageSenderPort] = None
         self._composer: Optional[MessageComposerPort] = None
+        seed = hash(self._account) & 0xFFFFFFFF
+        self._human_scheduler = HumanScheduler(HumanTempoConfig(seed=seed))
 
     def _ensure_driver(self) -> DriverProvider:
         if self._driver_manager is None:
@@ -113,6 +117,7 @@ class FactoryImpl(UseCaseFactory):
                         username=self._account,
                         password=self._password,
                         two_factor_code_provider=None,
+                        scheduler=self._human_scheduler,
                     )
                     session.ensure_session()
 
@@ -121,6 +126,7 @@ class FactoryImpl(UseCaseFactory):
                 base_url="https://www.instagram.com",
                 account_username=self._account,
                 rubro_detector=keyword_detect_rubro,
+                scheduler=self._human_scheduler,
             )
         return self._browser
 
@@ -151,14 +157,29 @@ class FactoryImpl(UseCaseFactory):
         if self._sender is None:
             dm = self._ensure_driver()
             driver = dm.initialize_driver()
-            base_sender = SeleniumMessageSender(driver=driver)
+            base_sender = SeleniumMessageSender(driver=driver, scheduler=self._human_scheduler)
             rng_key = hash(self._account) & 0xFFFFFFFF
             low, high = 8, 15
             per_hour = low + (rng_key % (high - low + 1))
             limiter = SlidingWindowRateLimiter(
                 RateLimitConfig(window_seconds=3600, max_events=per_hour)
             )
-            self._sender = RateLimitedSender(base_sender, limiter)
+            max_per_day = int(os.getenv("MAX_DMS_PER_DAY", "50"))
+            max_per_target = int(os.getenv("MAX_DMS_PER_TARGET_PER_DAY", "1"))
+            daily_limiter = None
+            per_target_cfg = None
+            if max_per_day > 0:
+                daily_limiter = SlidingWindowRateLimiter(
+                    RateLimitConfig(window_seconds=86400, max_events=max_per_day)
+                )
+            if max_per_target > 0:
+                per_target_cfg = RateLimitConfig(window_seconds=86400, max_events=max_per_target)
+            self._sender = RateLimitedSender(
+                base_sender,
+                limiter,
+                daily_limiter=daily_limiter,
+                per_target_cfg=per_target_cfg,
+            )
         return self._sender
 
     @property

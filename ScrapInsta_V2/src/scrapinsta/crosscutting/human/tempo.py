@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 import time
 from dataclasses import dataclass
@@ -26,6 +27,35 @@ class HumanTempoConfig:
 
     # Semilla opcional para reproducibilidad por sesión/cuenta
     seed: int | None = None
+
+    def __post_init__(self) -> None:
+        env_base_apm = os.getenv("HUMAN_BASE_APM")
+        if env_base_apm:
+            try:
+                self.base_apm = int(env_base_apm)
+            except Exception:
+                pass
+        env_apm_jitter = os.getenv("HUMAN_APM_JITTER")
+        if env_apm_jitter:
+            try:
+                self.apm_jitter = float(env_apm_jitter)
+            except Exception:
+                pass
+        env_long_every = os.getenv("HUMAN_LONG_PAUSE_EVERY")
+        if env_long_every:
+            try:
+                self.long_pause_every = int(env_long_every)
+            except Exception:
+                pass
+        env_long_min = os.getenv("HUMAN_LONG_PAUSE_MIN")
+        env_long_max = os.getenv("HUMAN_LONG_PAUSE_MAX")
+        if env_long_min or env_long_max:
+            try:
+                min_v = float(env_long_min or self.long_pause_range[0])
+                max_v = float(env_long_max or self.long_pause_range[1])
+                self.long_pause_range = (min_v, max_v)
+            except Exception:
+                pass
 
 
 class HumanScheduler:
@@ -73,7 +103,9 @@ class HumanScheduler:
 
         # Jitter final (ligero) para evitar patrones
         delay *= (1.0 + self._rng.uniform(-0.2, 0.3))
-        delay = max(0.1, min(delay, 15.0))  # cota superior por seguridad
+        min_delay = float(os.getenv("HUMAN_MIN_DELAY", "0.1"))
+        max_delay = float(os.getenv("HUMAN_MAX_DELAY", "15.0"))
+        delay = max(min_delay, min(delay, max_delay))  # cota superior por seguridad
 
         self._next_ts = time.monotonic() + delay
 

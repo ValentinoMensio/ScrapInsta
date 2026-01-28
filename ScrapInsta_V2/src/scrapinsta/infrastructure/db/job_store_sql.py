@@ -664,6 +664,44 @@ class JobStoreSQL(JobStorePort):
         finally:
             self._return(con)
 
+    def count_messages_sent_today(self, client_id: str) -> int:
+        """Cuenta mensajes enviados hoy por client_id (según last_sent_at)."""
+        cid = (client_id or "").strip()
+        if not cid:
+            return 0
+        sql = """
+            SELECT COUNT(*) AS total
+            FROM messages_sent
+            WHERE client_id=%s AND last_sent_at >= CURDATE()
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (cid,), "select", "messages_sent")
+                row = cur.fetchone() or {}
+                return int(row.get("total") or 0)
+        finally:
+            self._return(con)
+
+    def count_tasks_sent_today(self, client_id: str) -> int:
+        """Cuenta tareas en estado 'sent' hoy por client_id (en vuelo)."""
+        cid = (client_id or "").strip()
+        if not cid:
+            return 0
+        sql = """
+            SELECT COUNT(*) AS total
+            FROM job_tasks
+            WHERE client_id=%s AND status='sent' AND sent_at >= CURDATE()
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (cid,), "select", "job_tasks")
+                row = cur.fetchone() or {}
+                return int(row.get("total") or 0)
+        finally:
+            self._return(con)
+
     def register_message_sent(
         self,
         client_username: str,

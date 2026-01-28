@@ -15,6 +15,7 @@ from scrapinsta.infrastructure.auth.cookie_store import (
     clear_cookies_file,
 )
 from scrapinsta.infrastructure.auth.login_flow import login_instagram
+from scrapinsta.crosscutting.human.tempo import HumanScheduler
 
 log = get_logger("session_service")
 
@@ -64,6 +65,7 @@ class SessionService:
         base_url: str = "https://www.instagram.com/",
         login_url: str = "https://www.instagram.com/accounts/login/",
         two_factor_code_provider: Optional[Callable[[], str]] = None,
+        scheduler: Optional[HumanScheduler] = None,
     ) -> None:
         self._driver = driver
         self._username = (username or "").strip()
@@ -71,6 +73,7 @@ class SessionService:
         self._base_url = base_url
         self._login_url = login_url
         self._two_factor_code_provider = two_factor_code_provider
+        self._scheduler = scheduler
 
     def ensure_session(self) -> None:
         """
@@ -105,6 +108,11 @@ class SessionService:
                 log.debug("cookies_load_failed", username=self._username)
                 return False
 
+            if self._scheduler is not None:
+                try:
+                    self._scheduler.wait_turn()
+                except Exception:
+                    pass
             self._driver.get(self._base_url)
             if _is_logged_in(self._driver, timeout=10):
                 return True
@@ -134,6 +142,7 @@ class SessionService:
                 base_url=self._base_url,
                 login_url=self._login_url,
                 two_factor_code_provider=self._two_factor_code_provider,
+                scheduler=self._scheduler,
             )
             if not _is_logged_in(self._driver, timeout=10):
                 raise BrowserAuthError(

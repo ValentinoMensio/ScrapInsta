@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import time
+import random
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -78,6 +80,10 @@ class DriverProvider:
         # Directorio raíz para perfiles (centralizado)
         self.profile_root: Path = self.settings.profiles_path
 
+
+    def _select_user_agent(self) -> Optional[str]:
+        return self.user_agent
+
     # ------------------------------------------------------------------ public
 
     def initialize_driver(self):
@@ -90,7 +96,7 @@ class DriverProvider:
                     headless=self.headless,
                     disable_images=self.disable_images,
                     extra_flags=self.extra_flags,
-                    user_agent=self.user_agent,
+                    user_agent=self._select_user_agent(),
                     proxy_str=self.proxy_str,
                 )
                 self._seleniumwire_options = sw_options

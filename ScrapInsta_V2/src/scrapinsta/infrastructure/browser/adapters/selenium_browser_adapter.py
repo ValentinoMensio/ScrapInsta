@@ -91,7 +91,7 @@ class SeleniumBrowserAdapter(BrowserPort):
             self._sched.wait_turn()
             self.driver.get(url)
             try:
-                profile_page.close_instagram_login_popup(self.driver, timeout=5)
+                profile_page.close_instagram_login_popup(self.driver, timeout=5, scheduler=self._sched)
             except Exception:
                 pass
             sleep_jitter(1.0, 0.35)
