@@ -13,8 +13,10 @@ from passlib.context import CryptContext
 from scrapinsta.config.settings import Settings
 from scrapinsta.domain.ports.job_store import JobStorePort
 from scrapinsta.domain.ports.client_repo import ClientRepo
+from scrapinsta.domain.ports.profile_repo import ProfileRepository
 from scrapinsta.infrastructure.db.job_store_sql import JobStoreSQL
 from scrapinsta.infrastructure.db.client_repo_sql import ClientRepoSQL
+from scrapinsta.infrastructure.db.profile_repo_sql import ProfileRepoSQL
 from scrapinsta.infrastructure.redis import RedisClient, DistributedRateLimiter
 from scrapinsta.crosscutting.logging_config import get_logger
 
@@ -41,6 +43,7 @@ class Dependencies:
         *,
         job_store: Optional[JobStorePort] = None,
         client_repo: Optional[ClientRepo] = None,
+        profile_repo: Optional[ProfileRepository] = None,
         redis_client: Optional[RedisClient] = None,
         distributed_rate_limiter: Optional[DistributedRateLimiter] = None,
     ) -> None:
@@ -57,6 +60,7 @@ class Dependencies:
         self._settings = settings or Settings()
         self._job_store = job_store
         self._client_repo = client_repo
+        self._profile_repo = profile_repo
         self._redis_client_wrapper = redis_client
         self._distributed_rate_limiter = distributed_rate_limiter
         self._pwd_context: Optional[CryptContext] = None
@@ -81,6 +85,14 @@ class Dependencies:
             self._client_repo = ClientRepoSQL(self._settings.db_dsn)
             logger.debug("client_repo_created", db_dsn=self._settings.db_dsn)
         return self._client_repo
+
+    @property
+    def profile_repo(self) -> ProfileRepository:
+        """Repositorio de perfiles."""
+        if self._profile_repo is None:
+            self._profile_repo = ProfileRepoSQL(self._settings.db_dsn)
+            logger.debug("profile_repo_created", db_dsn=self._settings.db_dsn)
+        return self._profile_repo
     
     @property
     def redis_client_wrapper(self) -> RedisClient:

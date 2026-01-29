@@ -74,6 +74,48 @@ class JobSummaryResponse(BaseModel):
     error: int
 
 
+# =====================================================
+# Constantes para Send Messages
+# =====================================================
+MAX_SEND_USERNAMES = int(os.getenv("MAX_SEND_USERNAMES", "50"))
+MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", "1000"))
+MIN_MESSAGE_LENGTH = int(os.getenv("MIN_MESSAGE_LENGTH", "10"))
+MAX_CLIENT_MESSAGES_PER_DAY = int(os.getenv("MAX_CLIENT_MESSAGES_PER_DAY", "100"))
+MAX_CLIENT_MESSAGES_PER_HOUR = int(os.getenv("MAX_CLIENT_MESSAGES_PER_HOUR", "20"))
+
+
+class EnqueueSendRequest(BaseModel):
+    """Request para crear un job de envío de mensajes."""
+    usernames: List[str] = Field(..., min_length=1, description="Lista de usernames destino")
+    message_template: str = Field(..., min_length=MIN_MESSAGE_LENGTH, max_length=MAX_MESSAGE_LENGTH, description="Mensaje a enviar")
+    source_job_id: Optional[str] = Field(None, description="Job ID origen (fetch/analyze) para trazabilidad")
+    dry_run: bool = Field(default=True, description="Si es True, no envía realmente (para testing)")
+
+
+class EnqueueSendResponse(BaseModel):
+    job_id: str
+    total_items: int
+    daily_remaining: int
+    hourly_remaining: int
+
+
+class AnalyzedProfileItem(BaseModel):
+    username: str
+    followers: Optional[int] = None
+    following: Optional[int] = None
+    posts: Optional[int] = None
+    verified: Optional[bool] = None
+    private: Optional[bool] = None
+    bio: Optional[str] = None
+    success_score: Optional[float] = None
+
+
+class AnalyzedProfilesResponse(BaseModel):
+    job_id: str
+    profiles: List[AnalyzedProfileItem]
+    total: int
+
+
 @router.post("/ext/followings/enqueue", response_model=EnqueueResponse)
 def enqueue_followings(
     body: EnqueueFollowingsRequest,
@@ -226,6 +268,276 @@ def enqueue_analyze_profile(
         raise InternalServerError(f"create_job failed: {e}", error_code="DATABASE_ERROR", cause=e)
 
     return EnqueueAnalyzeResponse(job_id=job_id, total_items=len(usernames))
+
+
+@router.post("/ext/send/enqueue", response_model=EnqueueSendResponse)
+def enqueue_send_message(
+    body: EnqueueSendRequest,
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+    x_account: Optional[str] = Header(None),
+    x_client_id: Optional[str] = Header(None),
+    request: Request = None,
+):
+    """
+    Crea un Job 'send_message' para enviar DMs a los usernames especificados.
+    
+    Las tasks se crean en estado 'queued' y la extensión del cliente las
+    obtiene via /api/send/pull y reporta resultados via /api/send/result.
+    
+    Multi-tenant: cada job está vinculado a un client_id y las tasks
+    solo son visibles para ese cliente.
+    
+    Rate limiting:
+    - Límite diario por cliente (configurable)
+    - Límite por hora por cliente (configurable)
+    """
+    enforce_https(request)
+    client = authenticate_client(x_api_key, authorization, x_client_id)
+    check_scope(client, "send")
+    rate_limit(client, request)
+    
+    client_account = get_client_account(x_account)  # La cuenta de IG del cliente
+    client_id = client.get("id")
+    
+    deps = _get_deps_from_request(request)
+    job_store = deps.job_store
+    
+    # Bind contexto
+    bind_request_context(
+        client_id=client_id,
+        account=client_account,
+    )
+    
+    # Validar usernames
+    usernames = [str(u).strip().lower() for u in (body.usernames or []) if str(u).strip()]
+    if not usernames:
+        raise BadRequestError("usernames vacío")
+    
+    too_long = [u for u in usernames if len(u) > MAX_USERNAME_LENGTH]
+    if too_long:
+        raise BadRequestError(
+            "usernames contiene valores demasiado largos",
+            details={"max": MAX_USERNAME_LENGTH},
+        )
+    
+    invalid = [u for u in usernames if not re.match(USERNAME_REGEX, u)]
+    if invalid:
+        raise BadRequestError(
+            "usernames contiene valores inválidos",
+            details={"invalid": invalid[:5]},  # Mostrar solo los primeros 5
+        )
+    
+    if len(usernames) > MAX_SEND_USERNAMES:
+        raise BadRequestError(
+            "usernames excede el máximo permitido",
+            details={"count": len(usernames), "max": MAX_SEND_USERNAMES},
+        )
+    
+    # Validar mensaje
+    message = (body.message_template or "").strip()
+    if len(message) < MIN_MESSAGE_LENGTH:
+        raise BadRequestError(
+            "message_template muy corto",
+            details={"min": MIN_MESSAGE_LENGTH, "actual": len(message)},
+        )
+    if len(message) > MAX_MESSAGE_LENGTH:
+        raise BadRequestError(
+            "message_template muy largo",
+            details={"max": MAX_MESSAGE_LENGTH, "actual": len(message)},
+        )
+    
+    # =====================================================
+    # Rate Limiting por cliente (seguridad anti-abuso)
+    # =====================================================
+    limits = deps.client_repo.get_limits(client_id) or {}
+    daily_limit = int(limits.get("messages_per_day", MAX_CLIENT_MESSAGES_PER_DAY))
+    hourly_limit = int(limits.get("messages_per_hour", MAX_CLIENT_MESSAGES_PER_HOUR))
+    
+    # Contar mensajes enviados hoy
+    sent_today = job_store.count_messages_sent_today(client_id) or 0
+    # Contar tareas en vuelo (enviadas pero no confirmadas)
+    inflight_today = job_store.count_tasks_sent_today(client_id) or 0
+    # Contar tareas queued pendientes para este cliente
+    queued_today = job_store.count_tasks_queued_today(client_id) or 0
+    
+    used_today = sent_today + inflight_today + queued_today
+    daily_remaining = max(0, daily_limit - used_today)
+    
+    if daily_remaining <= 0:
+        raise BadRequestError(
+            "Límite diario de mensajes alcanzado",
+            details={
+                "limit": daily_limit,
+                "sent_today": sent_today,
+                "inflight": inflight_today,
+                "queued": queued_today,
+            },
+        )
+    
+    # Contar mensajes de última hora
+    sent_hour = job_store.count_messages_sent_last_hour(client_id) or 0
+    inflight_hour = job_store.count_tasks_sent_last_hour(client_id) or 0
+    queued_hour = job_store.count_tasks_queued_last_hour(client_id) or 0
+    used_hour = sent_hour + inflight_hour + queued_hour
+    hourly_remaining = max(0, hourly_limit - used_hour)
+    
+    if hourly_remaining <= 0:
+        raise BadRequestError(
+            "Límite por hora de mensajes alcanzado",
+            details={
+                "limit": hourly_limit,
+                "sent_hour": sent_hour,
+                "inflight": inflight_hour,
+                "queued": queued_hour,
+            },
+        )
+    
+    # Limitar usernames a lo que queda disponible
+    effective_usernames = usernames[:min(len(usernames), daily_remaining, hourly_remaining)]
+    
+    if len(effective_usernames) < len(usernames):
+        logger.warning(
+            "send_enqueue_truncated",
+            client_id=client_id,
+            requested=len(usernames),
+            effective=len(effective_usernames),
+            daily_remaining=daily_remaining,
+            hourly_remaining=hourly_remaining,
+        )
+    
+    # Filtrar usernames a los que ya se les envió (deduplicación)
+    filtered_usernames = []
+    for u in effective_usernames:
+        try:
+            if not job_store.was_message_sent(client_account, u):
+                filtered_usernames.append(u)
+        except Exception:
+            filtered_usernames.append(u)  # En caso de error, incluir
+    
+    if not filtered_usernames:
+        raise BadRequestError(
+            "Todos los usernames ya recibieron mensaje de esta cuenta",
+            details={"original_count": len(usernames)},
+        )
+    
+    job_id = f"send:{uuid4().hex}"
+    
+    logger.info(
+        "enqueue_send_requested",
+        client_id=client_id,
+        client_account=client_account,
+        usernames_count=len(filtered_usernames),
+        source_job_id=body.source_job_id,
+        dry_run=body.dry_run,
+    )
+    
+    try:
+        job_store.create_job(
+            job_id=job_id,
+            kind="send_message",
+            priority=5,
+            batch_size=1,  # Una task a la vez para control de rate
+            extra={
+                "usernames": filtered_usernames,
+                "message_template": message,
+                "client_account": client_account,
+                "source_job_id": body.source_job_id,
+                "dry_run": body.dry_run,
+                "client_id": client_id,
+            },
+            total_items=len(filtered_usernames),
+            client_id=client_id,
+        )
+    except Exception as e:
+        raise InternalServerError(f"create_job failed: {e}", error_code="DATABASE_ERROR", cause=e)
+    
+    return EnqueueSendResponse(
+        job_id=job_id,
+        total_items=len(filtered_usernames),
+        daily_remaining=daily_remaining - len(filtered_usernames),
+        hourly_remaining=hourly_remaining - len(filtered_usernames),
+    )
+
+
+@router.get("/ext/analyze/{job_id}/profiles", response_model=AnalyzedProfilesResponse)
+def get_analyzed_profiles(
+    job_id: str = Path(..., min_length=1, max_length=MAX_JOB_ID_LENGTH),
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+    x_client_id: Optional[str] = Header(None),
+    request: Request = None,
+):
+    """
+    Obtiene los perfiles analizados de un job de tipo analyze_profile.
+    
+    Útil para que el cliente vea los resultados y decida a quiénes enviar mensajes.
+    Solo devuelve perfiles del job que pertenece al cliente autenticado.
+    """
+    enforce_https(request)
+    client = authenticate_client(x_api_key, authorization, x_client_id)
+    rate_limit(client, request)
+    client_id = client.get("id")
+    
+    deps = _get_deps_from_request(request)
+    job_store = deps.job_store
+    profile_repo = deps.profile_repo
+    
+    # Verificar ownership del job
+    job_client_id = job_store.get_job_client_id(job_id)
+    if not job_client_id:
+        # Intentar con prefijo analyze: si no lo tiene
+        if not job_id.startswith("analyze:"):
+            alt_job_id = f"analyze:{job_id}"
+            job_client_id = job_store.get_job_client_id(alt_job_id)
+            if job_client_id:
+                job_id = alt_job_id
+    
+    if not job_client_id:
+        raise JobNotFoundError(f"Job '{job_id}' no encontrado")
+    
+    if job_client_id != client_id:
+        raise JobOwnershipError(
+            f"El job '{job_id}' no pertenece al cliente '{client_id}'",
+            details={"job_id": job_id, "client_id": client_id}
+        )
+    
+    # Obtener los usernames analizados desde las tasks completadas
+    try:
+        usernames = job_store.get_completed_usernames(job_id)
+    except Exception as e:
+        raise InternalServerError(f"Error obteniendo usernames: {e}", error_code="DATABASE_ERROR", cause=e)
+    
+    if not usernames:
+        return AnalyzedProfilesResponse(job_id=job_id, profiles=[], total=0)
+    
+    # Obtener datos de perfil para cada username
+    profiles = []
+    for username in usernames:
+        try:
+            profile_data = profile_repo.get_profile(username)
+            if profile_data:
+                profiles.append(AnalyzedProfileItem(
+                    username=username,
+                    followers=profile_data.get("followers"),
+                    following=profile_data.get("following"),
+                    posts=profile_data.get("posts"),
+                    verified=profile_data.get("verified"),
+                    private=profile_data.get("private"),
+                    bio=profile_data.get("bio"),
+                    success_score=profile_data.get("success_score"),
+                ))
+            else:
+                # Si no hay datos, incluir solo el username
+                profiles.append(AnalyzedProfileItem(username=username))
+        except Exception:
+            profiles.append(AnalyzedProfileItem(username=username))
+    
+    return AnalyzedProfilesResponse(
+        job_id=job_id,
+        profiles=profiles,
+        total=len(profiles),
+    )
 
 
 @router.get("/jobs/{job_id}/summary", response_model=JobSummaryResponse)

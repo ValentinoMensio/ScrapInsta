@@ -710,6 +710,99 @@ class JobStoreSQL(JobStorePort):
         finally:
             self._return(con)
 
+    def count_tasks_queued_today(self, client_id: str) -> int:
+        """Cuenta tareas en estado 'queued' hoy por client_id."""
+        cid = (client_id or "").strip()
+        if not cid:
+            return 0
+        sql = """
+            SELECT COUNT(*) AS total
+            FROM job_tasks
+            WHERE client_id=%s AND status='queued' AND created_at >= CURDATE()
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (cid,), "select", "job_tasks")
+                row = cur.fetchone() or {}
+                return int(row.get("total") or 0)
+        finally:
+            self._return(con)
+
+    def count_messages_sent_last_hour(self, client_id: str) -> int:
+        """Cuenta mensajes enviados en la última hora por client_id."""
+        cid = (client_id or "").strip()
+        if not cid:
+            return 0
+        sql = """
+            SELECT COUNT(*) AS total
+            FROM messages_sent
+            WHERE client_id=%s AND last_sent_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (cid,), "select", "messages_sent")
+                row = cur.fetchone() or {}
+                return int(row.get("total") or 0)
+        finally:
+            self._return(con)
+
+    def count_tasks_sent_last_hour(self, client_id: str) -> int:
+        """Cuenta tareas en estado 'sent' en la última hora por client_id."""
+        cid = (client_id or "").strip()
+        if not cid:
+            return 0
+        sql = """
+            SELECT COUNT(*) AS total
+            FROM job_tasks
+            WHERE client_id=%s AND status='sent' AND sent_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (cid,), "select", "job_tasks")
+                row = cur.fetchone() or {}
+                return int(row.get("total") or 0)
+        finally:
+            self._return(con)
+
+    def count_tasks_queued_last_hour(self, client_id: str) -> int:
+        """Cuenta tareas en estado 'queued' en la última hora por client_id."""
+        cid = (client_id or "").strip()
+        if not cid:
+            return 0
+        sql = """
+            SELECT COUNT(*) AS total
+            FROM job_tasks
+            WHERE client_id=%s AND status='queued' AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (cid,), "select", "job_tasks")
+                row = cur.fetchone() or {}
+                return int(row.get("total") or 0)
+        finally:
+            self._return(con)
+
+    def get_completed_usernames(self, job_id: str) -> List[str]:
+        """Obtiene los usernames de tareas completadas (ok) para un job."""
+        sql = """
+            SELECT username
+            FROM job_tasks
+            WHERE job_id=%s AND status='ok' AND username IS NOT NULL
+            ORDER BY created_at ASC
+        """
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, (job_id,), "select", "job_tasks")
+                rows = cur.fetchall()
+                return [r["username"] for r in rows if r.get("username")]
+        finally:
+            self._return(con)
+
     def register_message_sent(
         self,
         client_username: str,

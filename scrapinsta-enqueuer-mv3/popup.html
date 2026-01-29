@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Encolar followings</title>
+  <title>ScrapInsta</title>
   <style>
     :root {
       --ig1: #405DE6; --ig2: #5851DB; --ig3: #833AB4; --ig4: #C13584; --ig5: #E1306C; --ig6: #FD1D1D; --ig7: #FCAF45;
@@ -14,7 +14,7 @@
     body {
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial;
       margin: 0;
-      width: 320px;
+      width: 340px;
       min-height: 100vh;
       background:
         radial-gradient(35% 60% at 100% -10%, rgba(252,175,69,0.35), transparent 60%),
@@ -32,11 +32,16 @@
       border-radius: 14px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.18);
       padding: 12px;
+      margin-bottom: 12px;
     }
     h1 {
       font-size: 16px; margin: 0 0 6px;
       background: linear-gradient(90deg, var(--ig3), var(--ig5));
       -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    h2 {
+      font-size: 14px; margin: 12px 0 8px;
+      color: #333;
     }
     label { display: block; margin: 8px 0 4px; font-size: 12px; color: #222; font-weight: 600; }
     input, button, select, textarea {
@@ -47,6 +52,10 @@
     button { cursor: pointer; margin-top: 10px; color: #fff; border: none; background: linear-gradient(90deg, var(--ig3), var(--ig5)); }
     button:hover { filter: brightness(1.03); }
     button:active { transform: translateY(0.5px); }
+    button.secondary { background: #666; margin-top: 6px; }
+    button.danger { background: linear-gradient(90deg, #dc3545, #c82333); }
+    button.success { background: linear-gradient(90deg, #28a745, #218838); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
     .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
     small { color: var(--text-muted); }
     .ok { color: #0a7; }
@@ -57,13 +66,35 @@
     .badge.sent { background: #cce5ff; color: #004085; }
     .badge.ok { background: #d4edda; color: #155724; }
     .badge.error { background: #f8d7da; color: #721c24; }
+    .badge.running { background: #d1ecf1; color: #0c5460; animation: pulse 1.5s infinite; }
+    .badge.stopped { background: #e2e3e5; color: #383d41; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+    .timer { font-size: 24px; font-weight: bold; color: #333; text-align: center; padding: 10px; background: #f8f9fa; border-radius: 8px; margin: 8px 0; font-family: monospace; }
+    .profiles-list { max-height: 150px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; padding: 8px; margin: 8px 0; background: #fafafa; }
+    .profile-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid #eee; font-size: 12px; }
+    .profile-item:last-child { border-bottom: none; }
+    .profile-item input[type="checkbox"] { width: auto; margin-right: 8px; }
+    .dry-run-notice { background: #fff3cd; color: #856404; padding: 8px; border-radius: 8px; font-size: 11px; text-align: center; margin: 8px 0; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+    .tab { flex: 1; padding: 8px; text-align: center; cursor: pointer; border-radius: 8px; background: rgba(255,255,255,0.5); font-size: 12px; font-weight: 600; transition: all 0.2s; }
+    .tab.active { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    .tab:hover:not(.active) { background: rgba(255,255,255,0.7); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
   </style>
 </head>
 <body>
   <div class="panel">
-    <h1>Encolar followings</h1>
+    <h1>🔍 ScrapInsta</h1>
     <div class="muted" id="env"></div>
 
+    <div class="tabs">
+      <div class="tab active" data-tab="fetch">📥 Extraer</div>
+      <div class="tab" data-tab="send">📤 Enviar DMs</div>
+    </div>
+
+    <!-- TAB: Extraer Followings / Analyze -->
+    <div id="tab-fetch" class="tab-content active">
   <label>Modo</label>
   <select id="mode">
     <option value="followings">Followings → /ext/followings/enqueue</option>
@@ -111,6 +142,81 @@
           <div id="progress_fill" style="height: 100%; width: 0%; background: linear-gradient(90deg, #833AB4, #E1306C); transition: width 0.3s;"></div>
         </div>
         <small id="progress_text" style="color: #666;"></small>
+        </div>
+        
+        <!-- Botón para iniciar envío de DMs -->
+        <button id="start_send_flow" class="success" style="display:none; margin-top: 10px;">
+          📤 Enviar mensajes a estos perfiles
+        </button>
+      </div>
+    </div>
+
+    <!-- TAB: Enviar DMs -->
+    <div id="tab-send" class="tab-content">
+      <h2>📤 Envío de Mensajes</h2>
+      
+      <div class="dry-run-notice">
+        ⚠️ <strong>Modo Dry-Run activo:</strong> Los mensajes NO se envían realmente. Solo se simula para testing.
+      </div>
+      
+      <!-- Estado del Sender -->
+      <div id="sender_status_panel">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span>Estado:</span>
+          <span id="sender_status_badge" class="badge stopped">⏹️ Detenido</span>
+        </div>
+        
+        <div id="sender_timer" class="timer" style="display: none;">
+          00:00
+        </div>
+        
+        <div id="sender_stats" style="display: none; font-size: 12px; margin: 8px 0;">
+          <div>✅ Enviados esta sesión: <strong id="sender_session_count">0</strong></div>
+          <div>👤 Último: <strong id="sender_last_username">-</strong></div>
+        </div>
+      </div>
+      
+      <!-- Selección de perfiles para enviar -->
+      <div id="send_profiles_section" style="display: none;">
+        <label>Perfiles a enviar mensaje:</label>
+        <div class="profiles-list" id="profiles_list">
+          <div class="muted" style="text-align: center; padding: 20px;">
+            Primero extrae followings para ver perfiles disponibles
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 4px;">
+          <button id="select_all_profiles" class="secondary" style="flex: 1; font-size: 11px; padding: 4px;">Seleccionar todos</button>
+          <button id="deselect_all_profiles" class="secondary" style="flex: 1; font-size: 11px; padding: 4px;">Deseleccionar</button>
+        </div>
+      </div>
+      
+      <!-- Mensaje a enviar -->
+      <label>Mensaje</label>
+      <textarea id="send_message" rows="4" placeholder="Hola! Me gustaría contactarte..."></textarea>
+      
+      <div style="display: flex; gap: 8px; margin-top: 8px;">
+        <span style="font-size: 12px; color: #666;">Caracteres: <span id="message_char_count">0</span>/1000</span>
+      </div>
+      
+      <!-- Controles -->
+      <div id="send_controls">
+        <button id="enqueue_send" class="success">📤 Encolar envío de mensajes</button>
+        
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <button id="start_sender" class="success" style="flex: 1;">▶️ Iniciar</button>
+          <button id="stop_sender" class="danger" style="flex: 1;" disabled>⏹️ Detener</button>
+        </div>
+      </div>
+      
+      <p><small id="send_status">Listo para configurar.</small></p>
+      
+      <!-- Límites -->
+      <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; font-size: 11px; color: #666;">
+        <div>📊 Límites restantes hoy:</div>
+        <div style="display: flex; gap: 12px; margin-top: 4px;">
+          <span>Diario: <strong id="limit_daily">-</strong></span>
+          <span>Por hora: <strong id="limit_hourly">-</strong></span>
+        </div>
       </div>
     </div>
 

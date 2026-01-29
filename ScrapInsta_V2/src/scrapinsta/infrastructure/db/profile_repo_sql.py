@@ -203,6 +203,67 @@ class ProfileRepoSQL(ProfileRepository):
                 conn.close()
 
     @retry(DB_ERRORS)
+    def get_profile(self, username: str) -> Optional[dict]:
+        """
+        Obtiene datos de perfil por username.
+        Retorna dict con los campos o None si no existe.
+        """
+        u = (username or "").strip().lower()
+        if not u:
+            return None
+
+        conn = self._conn_factory()
+        cur: _Cursor | None = None
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT p.username, p.bio, p.followers, p.followings as following, 
+                       p.posts, p.is_verified as verified, p.privacy,
+                       pa.success_score, pa.engagement_score, pa.rubro
+                FROM profiles p
+                LEFT JOIN profile_analysis pa ON p.id = pa.profile_id
+                WHERE p.username = %s
+                ORDER BY pa.analyzed_at DESC
+                LIMIT 1
+                """,
+                (u,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            
+            # Soporta DictCursor y tuple
+            if isinstance(row, dict):
+                result = dict(row)
+                # Convertir privacy a boolean 'private'
+                privacy = result.pop("privacy", None)
+                result["private"] = privacy == "private" if privacy else False
+                return result
+            else:
+                # tuple/list fallback
+                return {
+                    "username": row[0],
+                    "bio": row[1],
+                    "followers": row[2],
+                    "following": row[3],
+                    "posts": row[4],
+                    "verified": row[5],
+                    "private": row[6] == "private" if row[6] else False,
+                    "success_score": row[7],
+                    "engagement_score": row[8],
+                    "rubro": row[9],
+                }
+        except Exception as e:
+            logger.exception("get_profile failed", extra={"username": u})
+            return None
+        finally:
+            try:
+                if cur: cur.close()
+            finally:
+                conn.close()
+
+    @retry(DB_ERRORS)
     def save_analysis_snapshot(
         self,
         profile_id: int,
