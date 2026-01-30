@@ -15,9 +15,18 @@ echo "🚀 Iniciando ScrapInsta V2"
 echo "=========================="
 echo ""
 
-# Cargar .env si existe
+# Cargar .env si existe (ignorar comentarios y comentarios al final de línea)
 if [ -f .env ]; then
-    export $(grep -v '^#' .env | xargs)
+    set -a
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        line="${line%%#*}"   # quitar comentario inline
+        line="${line%"${line##*[! ]}"}"   # trim espacio final
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && export "$line"
+    done < .env
+    set +a
     success "Variables de entorno cargadas"
 else
     error "No se encontró .env. Ejecuta primero: ./scripts/setup_local.sh"

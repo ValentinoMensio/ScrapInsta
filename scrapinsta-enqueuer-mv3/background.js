@@ -41,6 +41,7 @@ function loadSettings() {
         api_token: "",
         x_account: "",
         x_client_id: "",
+        client_id: "",
         use_jwt: false,
         jwt_token: "",
         jwt_expires_at: 0,
@@ -99,8 +100,9 @@ async function getAuthHeaders(cfg) {
     }
   }
   
-  if (cfg.x_client_id) {
-    headers["X-Client-Id"] = cfg.x_client_id;
+  const clientId = cfg.x_client_id || cfg.client_id || "";
+  if (clientId) {
+    headers["X-Client-Id"] = clientId;
   }
   
   return headers;
@@ -226,41 +228,80 @@ async function sendDMViaContentScript(username, message, dryRun = true) {
     if (!tab || !tab.id) {
       return { success: false, error: 'no_instagram_tab' };
     }
-    
-    // Navegar al perfil del usuario primero
-    const profileUrl = `https://www.instagram.com/${username}/`;
-    await chrome.tabs.update(tab.id, { url: profileUrl });
-    
-    // Esperar a que cargue
-    await new Promise((resolve) => {
-      const listener = (tabId, info) => {
-        if (tabId === tab.id && info.status === 'complete') {
+
+    const directUrl = 'https://www.instagram.com/direct/';
+    const alreadyOnDirect = tab.url && tab.url.includes('instagram.com/direct');
+    if (!alreadyOnDirect) {
+      await chrome.tabs.update(tab.id, { url: directUrl });
+      await new Promise((resolve) => {
+        const listener = (tabId, info) => {
+          if (tabId === tab.id && info.status === 'complete') {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+        setTimeout(() => {
           chrome.tabs.onUpdated.removeListener(listener);
           resolve();
-        }
-      };
-      chrome.tabs.onUpdated.addListener(listener);
-      setTimeout(() => {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }, 10000);
-    });
-    
-    // Pequeña espera adicional para que el content script se inyecte
-    await new Promise(r => setTimeout(r, 2000));
-    
-    // Enviar mensaje al content script
-    const result = await chrome.tabs.sendMessage(tab.id, {
+        }, 10000);
+      });
+      // Dar tiempo al content script a inyectarse en la nueva página
+      await new Promise(r => setTimeout(r, 3500));
+    } else {
+      await new Promise(r => setTimeout(r, 800));
+    }
+
+    // Comprobar que la pestaña sigue en Instagram (p. ej. usuario navegó a otro sitio)
+    let currentTab;
+    try {
+      currentTab = await chrome.tabs.get(tab.id);
+    } catch (_) {
+      return { success: false, error: 'Pestaña de Instagram cerrada. Abre instagram.com/direct/ y vuelve a Iniciar.' };
+    }
+    if (!currentTab || !currentTab.url || !currentTab.url.includes('instagram.com')) {
+      return { success: false, error: 'Pestaña de Instagram cerrada o cambiada. Abre instagram.com/direct/ y vuelve a Iniciar.' };
+    }
+
+    const payload = {
       action: 'send_dm',
       username: username,
       text: message,
       dryRun: dryRun,
-    });
-    
-    return result;
+    };
+    const maxTries = 3;
+    let lastErr = null;
+    for (let tryNum = 1; tryNum <= maxTries; tryNum++) {
+      try {
+        console.log('[BG] Enviando mensaje send_dm al content script (tab', tab.id, ', intento', tryNum, ')');
+        const result = await chrome.tabs.sendMessage(tab.id, payload);
+        console.log('[BG] Resultado del content script:', result);
+        if (!result.success && result.error) {
+          console.error('[BG] send_dm falló:', result.error, 'steps:', result.steps);
+        }
+        return result;
+      } catch (e) {
+        lastErr = e;
+        const isReceivingEnd = (e.message || '').includes('Receiving end does not exist');
+        if (isReceivingEnd && tryNum < maxTries) {
+          console.warn('[BG] Content script no listo, esperando 2s antes de reintentar...');
+          await new Promise(r => setTimeout(r, 2000));
+        } else {
+          throw e;
+        }
+      }
+    }
+    throw lastErr;
   } catch (e) {
     console.error('[BG] sendDMViaContentScript error:', e);
-    return { success: false, error: e.message };
+    const msg = (e && e.message) || String(e);
+    if (msg.includes('Receiving end does not exist')) {
+      return {
+        success: false,
+        error: 'Extensión no conectada a la pestaña. Abre una pestaña en instagram.com/direct/ (o recarga la de Instagram) y vuelve a Iniciar.',
+      };
+    }
+    return { success: false, error: msg };
   }
 }
 
@@ -296,6 +337,7 @@ async function processNextTask() {
   
   if (!task) {
     console.log('[BG] No hay tareas pendientes');
+    await stopSender('no_tasks');
     return;
   }
   
@@ -319,19 +361,23 @@ async function processNextTask() {
   
   // Reportar resultado
   await reportResult(task.job_id, task.task_id, result.success, username, result.error);
-  
+
   // Actualizar estado
   state.dmsSentThisSession++;
   state.lastDMTime = Date.now();
-  state.nextDMTime = Date.now() + randomBetween(CONFIG.minDelayBetweenDMs, CONFIG.maxDelayBetweenDMs);
+  if (dryRun) {
+    state.nextDMTime = Date.now() + 5000;
+  } else {
+    state.nextDMTime = Date.now() + randomBetween(CONFIG.minDelayBetweenDMs, CONFIG.maxDelayBetweenDMs);
+  }
   state.currentTask = null;
-  
+
   await saveState({
     dm_sender_session_count: state.dmsSentThisSession,
     dm_sender_last_time: state.lastDMTime,
     dm_sender_next_time: state.nextDMTime,
   });
-  
+
   // Notificar al popup
   chrome.runtime.sendMessage({
     type: 'dm_status_update',
@@ -342,8 +388,16 @@ async function processNextTask() {
       nextDMTime: state.nextDMTime,
     },
   }).catch(() => {});
-  
-  console.log(`[BG] DM ${result.success ? 'exitoso' : 'fallido'} a ${username}. Próximo en ${Math.round((state.nextDMTime - Date.now()) / 60000)} minutos`);
+
+  if (dryRun) {
+    console.log(`[BG] Dry-run OK para ${username}. Siguiente usuario en 5 s.`);
+  } else {
+    console.log(`[BG] DM ${result.success ? 'exitoso' : 'fallido'} a ${username}. Próximo en ${Math.round((state.nextDMTime - Date.now()) / 60000)} minutos`);
+  }
+
+  if (dryRun && state.isRunning) {
+    setTimeout(() => processNextTask(), 5000);
+  }
 }
 
 // =====================================================
@@ -384,8 +438,18 @@ async function stopSender(reason = 'manual') {
     dm_sender_running: false,
   });
   
-  // Cancelar alarm
   chrome.alarms.clear(state.pollAlarmName);
+  
+  chrome.runtime.sendMessage({
+    type: 'dm_status_update',
+    data: {
+      lastUsername: null,
+      success: null,
+      sessionCount: state.dmsSentThisSession,
+      nextDMTime: state.nextDMTime,
+      isRunning: false,
+    },
+  }).catch(() => {});
   
   return { status: 'stopped', reason };
 }

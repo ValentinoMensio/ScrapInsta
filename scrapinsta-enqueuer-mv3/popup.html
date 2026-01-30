@@ -15,7 +15,8 @@
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial;
       margin: 0;
       width: 340px;
-      min-height: 100vh;
+      max-height: 560px;
+      overflow-y: auto;
       background:
         radial-gradient(35% 60% at 100% -10%, rgba(252,175,69,0.35), transparent 60%),
         radial-gradient(40% 60% at -10% 0%, rgba(129,52,175,0.28), transparent 60%),
@@ -40,7 +41,7 @@
       -webkit-background-clip: text; background-clip: text; color: transparent;
     }
     h2 {
-      font-size: 14px; margin: 12px 0 8px;
+      font-size: 14px; margin: 0 0 8px;
       color: #333;
     }
     label { display: block; margin: 8px 0 4px; font-size: 12px; color: #222; font-weight: 600; }
@@ -69,18 +70,37 @@
     .badge.running { background: #d1ecf1; color: #0c5460; animation: pulse 1.5s infinite; }
     .badge.stopped { background: #e2e3e5; color: #383d41; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-    .timer { font-size: 24px; font-weight: bold; color: #333; text-align: center; padding: 10px; background: #f8f9fa; border-radius: 8px; margin: 8px 0; font-family: monospace; }
-    .profiles-list { max-height: 150px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; padding: 8px; margin: 8px 0; background: #fafafa; }
-    .profile-item { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid #eee; font-size: 12px; }
-    .profile-item:last-child { border-bottom: none; }
-    .profile-item input[type="checkbox"] { width: auto; margin-right: 8px; }
-    .dry-run-notice { background: #fff3cd; color: #856404; padding: 8px; border-radius: 8px; font-size: 11px; text-align: center; margin: 8px 0; }
-    .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
-    .tab { flex: 1; padding: 8px; text-align: center; cursor: pointer; border-radius: 8px; background: rgba(255,255,255,0.5); font-size: 12px; font-weight: 600; transition: all 0.2s; }
-    .tab.active { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-    .tab:hover:not(.active) { background: rgba(255,255,255,0.7); }
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
+    .tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .tab {
+      flex: 1;
+      padding: 10px 8px;
+      text-align: center;
+      cursor: pointer;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(255,255,255,0.5);
+      border: 1px solid rgba(0,0,0,0.08);
+      transition: all 0.2s;
+    }
+    .tab:hover {
+      background: rgba(255,255,255,0.8);
+    }
+    .tab.active {
+      background: #fff;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+      border-color: rgba(225,48,108,0.3);
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -93,124 +113,105 @@
       <div class="tab" data-tab="send">📤 Enviar DMs</div>
     </div>
 
-    <!-- TAB: Extraer Followings / Analyze -->
+    <!-- Pestaña: Extraer -->
     <div id="tab-fetch" class="tab-content active">
-  <label>Modo</label>
-  <select id="mode">
-    <option value="followings">Followings → /ext/followings/enqueue</option>
-    <option value="analyze">Analyze profiles → /ext/analyze/enqueue</option>
-  </select>
+      <label>Modo</label>
+      <select id="mode">
+        <option value="followings">Followings → /ext/followings/enqueue</option>
+        <option value="analyze">Analyze profiles → /ext/analyze/enqueue</option>
+      </select>
 
-    <div id="followings_fields">
-    <label>Target username</label>
-    <input id="target" placeholder="usuario objetivo" autocomplete="off" />
-
-    <label>Límite</label>
-    <div class="row">
-      <input id="limit" type="number" min="1" step="1" value="50" />
-      <button id="enqueue">Encolar</button>
-    </div>
-    </div>
-
-    <div id="analyze_fields" style="display:none;">
-    <label>Usernames (uno por línea o separados por coma)</label>
-    <textarea id="usernames" rows="5" placeholder="user1\nuser2, user3"></textarea>
-    <label>Tamaño de lote</label>
-    <div class="row">
-      <input id="batch_size" type="number" min="1" step="1" value="25" />
-      <button id="enqueue_analyze">Encolar analyze</button>
-    </div>
-    </div>
-
-    <p><small id="status">Listo.</small></p>
-
-    <!-- Job Status Section -->
-    <div id="job_status_section" style="display:none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
-      <label style="font-size: 11px; color: #666;">Último Job</label>
-      <div class="row" style="margin-top: 4px;">
-        <input id="last_job_id" readonly style="font-size: 11px; padding: 6px;" />
-        <button id="check_status" style="font-size: 11px; padding: 6px 10px;">Ver Estado</button>
+      <div id="followings_fields">
+        <label>Target username</label>
+        <input id="target" placeholder="usuario objetivo" autocomplete="off" />
+        <label>Límite</label>
+        <div class="row">
+          <input id="limit" type="number" min="1" step="1" value="50" />
+          <button id="enqueue">Encolar</button>
+        </div>
       </div>
-      <div id="job_progress" style="margin-top: 8px; display: none;">
-        <div style="display: flex; gap: 8px; font-size: 11px; flex-wrap: wrap;">
-          <span class="badge queued">⏳ <span id="stat_queued">0</span></span>
-          <span class="badge sent">🚀 <span id="stat_sent">0</span></span>
-          <span class="badge ok">✅ <span id="stat_ok">0</span></span>
-          <span class="badge error">❌ <span id="stat_error">0</span></span>
+
+      <div id="analyze_fields" style="display:none;">
+        <label>Usernames (uno por línea o separados por coma)</label>
+        <textarea id="usernames" rows="5" placeholder="user1\nuser2, user3"></textarea>
+        <label>Tamaño de lote</label>
+        <div class="row">
+          <input id="batch_size" type="number" min="1" step="1" value="25" />
+          <button id="enqueue_analyze">Encolar analyze</button>
         </div>
-        <div id="progress_bar" style="margin-top: 6px; height: 6px; background: #eee; border-radius: 3px; overflow: hidden;">
-          <div id="progress_fill" style="height: 100%; width: 0%; background: linear-gradient(90deg, #833AB4, #E1306C); transition: width 0.3s;"></div>
+      </div>
+
+      <p><small id="status">Listo.</small></p>
+
+      <div id="job_status_section" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
+        <label style="font-size: 11px; color: #666;">Últimos 5 jobs (ver estado)</label>
+        <select id="last_jobs_select" style="margin-top: 4px; font-size: 11px; padding: 6px;">
+          <option value="">— Cargar jobs —</option>
+        </select>
+        <div id="job_progress" style="margin-top: 8px; display: none;">
+          <div style="display: flex; gap: 8px; font-size: 11px; flex-wrap: wrap;">
+            <span class="badge queued">⏳ <span id="stat_queued">0</span></span>
+            <span class="badge sent">🚀 <span id="stat_sent">0</span></span>
+            <span class="badge ok">✅ <span id="stat_ok">0</span></span>
+            <span class="badge error">❌ <span id="stat_error">0</span></span>
+          </div>
+          <div id="progress_bar" style="margin-top: 6px; height: 6px; background: #eee; border-radius: 3px; overflow: hidden;">
+            <div id="progress_fill" style="height: 100%; width: 0%; background: linear-gradient(90deg, #833AB4, #E1306C); transition: width 0.3s;"></div>
+          </div>
+          <small id="progress_text" style="color: #666;"></small>
         </div>
-        <small id="progress_text" style="color: #666;"></small>
-        </div>
-        
-        <!-- Botón para iniciar envío de DMs -->
-        <button id="start_send_flow" class="success" style="display:none; margin-top: 10px;">
-          📤 Enviar mensajes a estos perfiles
-        </button>
       </div>
     </div>
 
-    <!-- TAB: Enviar DMs -->
+    <!-- Pestaña: Enviar DMs -->
     <div id="tab-send" class="tab-content">
       <h2>📤 Envío de Mensajes</h2>
-      
-      <div class="dry-run-notice">
-        ⚠️ <strong>Modo Dry-Run activo:</strong> Los mensajes NO se envían realmente. Solo se simula para testing.
+      <p class="muted" style="font-size: 11px; margin-bottom: 8px;">Elige un job de <strong>extraer followings</strong> y envía mensaje a los que aún no recibieron.</p>
+
+      <label style="font-size: 12px; font-weight: 600;">Job de followings</label>
+      <select id="send_followings_job_select" style="margin-top: 4px; margin-bottom: 8px; min-height: 36px;">
+        <option value="">— Cargar jobs —</option>
+      </select>
+      <div id="send_followings_info" style="margin-top: 8px; font-size: 12px; color: #666; display: none;">
+        <span id="send_followings_summary"></span>
       </div>
-      
-      <!-- Estado del Sender -->
-      <div id="sender_status_panel">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <span>Estado:</span>
-          <span id="sender_status_badge" class="badge stopped">⏹️ Detenido</span>
-        </div>
-        
-        <div id="sender_timer" class="timer" style="display: none;">
-          00:00
-        </div>
-        
-        <div id="sender_stats" style="display: none; font-size: 12px; margin: 8px 0;">
-          <div>✅ Enviados esta sesión: <strong id="sender_session_count">0</strong></div>
-          <div>👤 Último: <strong id="sender_last_username">-</strong></div>
-        </div>
-      </div>
-      
-      <!-- Selección de perfiles para enviar -->
-      <div id="send_profiles_section" style="display: none;">
-        <label>Perfiles a enviar mensaje:</label>
-        <div class="profiles-list" id="profiles_list">
-          <div class="muted" style="text-align: center; padding: 20px;">
-            Primero extrae followings para ver perfiles disponibles
+
+      <label style="display: flex; align-items: center; margin: 12px 0 8px; cursor: pointer;">
+        <input type="checkbox" id="dry_run" checked style="width: auto; margin-right: 8px;" />
+        <span>Modo Dry-Run (escribir pero no enviar; desmarcar para enviar realmente)</span>
+      </label>
+
+      <!-- Progreso del job de envío (igual que en Extraer: badges + barra + texto) -->
+      <div id="send_job_progress_section" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; display: none;">
+        <label style="font-size: 11px; color: #666;">Progreso del envío</label>
+        <div id="send_job_progress" style="margin-top: 8px;">
+          <div style="display: flex; gap: 8px; font-size: 11px; flex-wrap: wrap;">
+            <span class="badge queued">⏳ <span id="send_stat_queued">0</span></span>
+            <span class="badge sent">🚀 <span id="send_stat_sent">0</span></span>
+            <span class="badge ok">✅ <span id="send_stat_ok">0</span></span>
+            <span class="badge error">❌ <span id="send_stat_error">0</span></span>
           </div>
-        </div>
-        <div style="display: flex; gap: 8px; margin-top: 4px;">
-          <button id="select_all_profiles" class="secondary" style="flex: 1; font-size: 11px; padding: 4px;">Seleccionar todos</button>
-          <button id="deselect_all_profiles" class="secondary" style="flex: 1; font-size: 11px; padding: 4px;">Deseleccionar</button>
+          <div id="send_progress_bar" style="margin-top: 6px; height: 6px; background: #eee; border-radius: 3px; overflow: hidden;">
+            <div id="send_progress_fill" style="height: 100%; width: 0%; background: linear-gradient(90deg, #833AB4, #E1306C); transition: width 0.3s;"></div>
+          </div>
+          <small id="send_progress_text" style="color: #666;"></small>
         </div>
       </div>
-      
-      <!-- Mensaje a enviar -->
+
       <label>Mensaje</label>
       <textarea id="send_message" rows="4" placeholder="Hola! Me gustaría contactarte..."></textarea>
-      
-      <div style="display: flex; gap: 8px; margin-top: 8px;">
-        <span style="font-size: 12px; color: #666;">Caracteres: <span id="message_char_count">0</span>/1000</span>
-      </div>
-      
-      <!-- Controles -->
+      <div style="margin-top: 4px; font-size: 12px; color: #666;">Caracteres: <span id="message_char_count">0</span>/1000</div>
+
       <div id="send_controls">
-        <button id="enqueue_send" class="success">📤 Encolar envío de mensajes</button>
-        
+        <button id="enqueue_send" class="success">📤 Encolar envío a pendientes</button>
         <div style="display: flex; gap: 8px; margin-top: 8px;">
           <button id="start_sender" class="success" style="flex: 1;">▶️ Iniciar</button>
           <button id="stop_sender" class="danger" style="flex: 1;" disabled>⏹️ Detener</button>
         </div>
       </div>
-      
+
       <p><small id="send_status">Listo para configurar.</small></p>
-      
-      <!-- Límites -->
+
       <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; font-size: 11px; color: #666;">
         <div>📊 Límites restantes hoy:</div>
         <div style="display: flex; gap: 12px; margin-top: 4px;">
@@ -220,7 +221,7 @@
       </div>
     </div>
 
-    <p class="muted">Configura API, token, tu <b>X-Account</b> y opcional <b>X-Client-Id</b> en <i>Opciones</i>.</p>
+    <p class="muted" style="margin-top: 12px;">Configura API, token, <b>X-Account</b> y opcional <b>X-Client-Id</b> en <i>Opciones</i>.</p>
   </div>
 
   <script src="popup.js"></script>

@@ -26,8 +26,9 @@ from scrapinsta.domain.ports.message_port import (
 from scrapinsta.application.dto.messages import MessageRequest
 
 from scrapinsta.infrastructure.browser.pages import profile_page
+from scrapinsta.crosscutting.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("selenium_message_sender")
 
 
 class SeleniumMessageSender(MessageSenderPort):
@@ -91,7 +92,9 @@ class SeleniumMessageSender(MessageSenderPort):
 
         try:
             self._sched.wait_turn()
+            logger.info("dm_step", step="open_profile", username=uname)
             self._open_profile(uname)
+            logger.info("dm_step_done", step="open_profile", username=uname)
             self._sleep_short()
             try:
                 human_scroll(self.driver, total_px=600, duration=0.9, scheduler=self._sched)
@@ -99,22 +102,30 @@ class SeleniumMessageSender(MessageSenderPort):
                 pass
 
             self._sched.wait_turn()
+            logger.info("dm_step", step="open_message_dialog", username=uname)
             self._open_message_dialog()
+            logger.info("dm_step_done", step="open_message_dialog", username=uname)
             self._sleep_short()
 
             self._sched.wait_turn()
+            logger.info("dm_step", step="type_message", username=uname, text_length=len(text))
             self._type_message(text)
+            logger.info("dm_step_done", step="type_message", username=uname)
             self._sleep_short()
 
             self._sched.wait_turn()
+            logger.info("dm_step", step="send_action", username=uname)
             self._send_action()
+            logger.info("dm_step_done", step="send_action", username=uname)
             self._sleep_short()
 
             return True
 
         except ElementClickInterceptedException as e:
+            logger.warning("dm_step_error", step="click", error=str(e), error_type="ElementClickInterceptedException")
             raise DMTransientUIBlock(f"overlay intercept: {e}") from e
         except (TimeoutException, NoSuchElementException, StaleElementReferenceException) as e:
+            logger.warning("dm_step_error", step="element_not_found", error=str(e), error_type=type(e).__name__)
             raise DMInputTimeout(f"input timeout: {e}") from e
         except WebDriverException as e:
             msg = (str(e) or "").lower()
@@ -208,14 +219,18 @@ class SeleniumMessageSender(MessageSenderPort):
     def _wait_any_xpath(self, xpaths: tuple[str, ...], *, timeout: Optional[float] = None):
         _timeout = timeout or self._wait_timeout
         last_exc = None
-        for xp in xpaths:
+        for i, xp in enumerate(xpaths):
             try:
-                return WebDriverWait(self.driver, _timeout).until(
+                el = WebDriverWait(self.driver, _timeout).until(
                     EC.presence_of_element_located((By.XPATH, xp))
                 )
+                logger.debug("dm_selector_ok", xpath_index=i, xpath_preview=xp[:80])
+                return el
             except Exception as e:
                 last_exc = e
+                logger.debug("dm_selector_fail", xpath_index=i, xpath_preview=xp[:80], error=str(e))
                 continue
+        logger.warning("dm_all_selectors_failed", xpath_count=len(xpaths), last_error=str(last_exc))
         raise DMInputTimeout(f"element not found for any xpath: {xpaths}") from last_exc
 
     def _sleep_short(self) -> None:

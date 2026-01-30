@@ -138,6 +138,22 @@ class JobStorePort(Protocol):
         """
         ...
 
+    def list_jobs_by_client(
+        self, client_id: str, limit: int = 5, kind: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Lista los últimos jobs del cliente, más recientes primero.
+        
+        Args:
+            client_id: ID del cliente
+            limit: Número máximo de jobs a devolver
+            kind: Si se especifica, filtrar por tipo (ej: 'fetch_followings')
+        
+        Returns:
+            Lista de dicts con id, kind, status, created_at
+        """
+        ...
+
     def job_summary(self, job_id: str, client_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Obtiene un resumen de un job.

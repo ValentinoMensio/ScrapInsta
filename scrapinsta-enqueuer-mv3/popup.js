@@ -15,6 +15,7 @@ function loadSettings() {
         api_token: "",
         x_account: "",
         x_client_id: "",
+        client_id: "",
         default_limit: 50,
         use_jwt: false,
         jwt_token: "",
@@ -89,8 +90,9 @@ async function getAuthHeaders(cfg) {
     }
   }
   
-  if (cfg.x_client_id) {
-    headers["X-Client-Id"] = cfg.x_client_id;
+  const clientId = cfg.x_client_id || cfg.client_id || "";
+  if (clientId) {
+    headers["X-Client-Id"] = clientId;
   }
   
   return headers;
@@ -103,21 +105,26 @@ async function getAuthHeaders(cfg) {
 function initTabs() {
   const tabs = $$('.tab');
   const contents = $$('.tab-content');
-  
+  if (!tabs.length) return;
   tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
+    tab.addEventListener('click', async () => {
       const targetId = `tab-${tab.dataset.tab}`;
-      
       tabs.forEach(t => t.classList.remove('active'));
       contents.forEach(c => c.classList.remove('active'));
-      
       tab.classList.add('active');
       const targetContent = $(`#${targetId}`);
-      if (targetContent) targetContent.classList.add('active');
-      
-      // Si es tab de envío, actualizar estado
+      if (targetContent) {
+        targetContent.classList.add('active');
+        targetContent.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+      }
       if (tab.dataset.tab === 'send') {
         updateSenderStatus();
+        loadFollowingsJobsForSend();
+        const stats = await refreshSendJobProgress();
+        if (stats && ((stats.queued || 0) + (stats.sent || 0) > 0)) startSendProgressPolling();
+      }
+      if (tab.dataset.tab === 'fetch') {
+        loadLastJobs(5);
       }
     });
   });
@@ -231,10 +238,52 @@ let statusCheckInterval = null;
 
 function showJobStatusSection(jobId) {
   currentJobId = jobId;
-  $("#last_job_id").value = jobId;
-  $("#job_status_section").style.display = "block";
+  const sel = $("#last_jobs_select");
+  if (sel && jobId) {
+    if (Array.from(sel.options).every(o => o.value !== jobId)) {
+      const opt = document.createElement("option");
+      opt.value = jobId;
+      opt.textContent = jobId;
+      sel.appendChild(opt);
+    }
+    sel.value = jobId;
+  }
   $("#job_progress").style.display = "none";
   chrome.storage.local.set({ last_job_id: jobId });
+}
+
+async function loadLastJobs(limit = 5) {
+  const cfg = await loadSettings();
+  if (!cfg.api_base) return;
+  const headers = await getAuthHeaders(cfg);
+  const url = new URL("/ext/jobs", cfg.api_base);
+  url.searchParams.set("limit", String(limit));
+  try {
+    const resp = await fetch(url.toString(), { headers });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const jobs = data.jobs || [];
+    const sel = $("#last_jobs_select");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— Selecciona un job —</option>';
+    jobs.forEach((j) => {
+      const opt = document.createElement("option");
+      opt.value = j.id;
+      const kind = j.kind || "";
+      const status = j.status || "";
+      opt.textContent = `${j.id} (${kind} ${status})`;
+      sel.appendChild(opt);
+    });
+    const saved = await new Promise((r) => chrome.storage.local.get({ last_job_id: null }, (d) => r(d.last_job_id)));
+    if (saved && jobs.some((j) => j.id === saved)) sel.value = saved;
+    if (sel.value) {
+      currentJobId = sel.value;
+      const stats = await checkJobStatus(sel.value);
+      if (stats) updateJobProgress(stats);
+    }
+  } catch (e) {
+    console.error("[loadLastJobs]", e);
+  }
 }
 
 async function fetchJobSummary(cfg, headers, jid) {
@@ -259,7 +308,7 @@ async function fetchJobSummary(cfg, headers, jid) {
 
 async function checkJobStatus(jobId = null) {
   const cfg = await loadSettings();
-  const jid = jobId || currentJobId || $("#last_job_id").value;
+  const jid = jobId || currentJobId;
   
   if (!jid) {
     setStatus("No hay job para verificar", true);
@@ -329,14 +378,10 @@ function updateJobProgress(stats) {
   if (isFinished) {
     statusText = `✅ Completado: ${ok} OK, ${error} errores`;
     stopAutoRefresh();
-    
-    // Mostrar botón para enviar mensajes
-    const sendBtn = $("#start_send_flow");
-    if (sendBtn && ok > 0) {
-      sendBtn.style.display = "block";
-      sendBtn.dataset.analyzeJobId = stats.analyzeJobId || currentJobId;
-    }
-  } else if (!hasAnalyze && queued === 0 && sent === 0 && ok > 0) {
+  } else if (!hasAnalyze && queued === 0 && sent === 0 && (ok > 0 || error > 0)) {
+    // Job de análisis visto directamente o fetch ya terminado
+    statusText = `✅ Completado: ${ok} OK, ${error} errores`;
+  } else if (!hasAnalyze && queued === 0 && sent === 0) {
     statusText = `⏳ Esperando análisis...`;
   } else if (sent > 0) {
     statusText = `🚀 Procesando: ${completed}/${total} (${percent}%)`;
@@ -371,10 +416,11 @@ function stopAutoRefresh() {
 }
 
 // =====================================================
-// SEND DMs (Tab 2)
+// SEND DMs (Tab 2) — Job de followings + pendientes
 // =====================================================
 
-let selectedProfiles = new Set();
+let selectedSendJobId = null;
+let selectedSendUsernames = [];
 
 function setSendStatus(msg, isErr = false) {
   const el = $("#send_status");
@@ -384,158 +430,263 @@ function setSendStatus(msg, isErr = false) {
   }
 }
 
-async function loadAnalyzedProfiles(analyzeJobId) {
+function updateSendJobProgress(stats) {
+  if (!stats) return;
+  const queued = stats.queued || 0;
+  const sent = stats.sent || 0;
+  const ok = stats.ok || 0;
+  const error = stats.error || 0;
+  const total = queued + sent + ok + error;
+  const completed = ok + error;
+  const isFinished = queued === 0 && sent === 0 && total > 0;
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  const qEl = $("#send_stat_queued");
+  const sEl = $("#send_stat_sent");
+  const oEl = $("#send_stat_ok");
+  const eEl = $("#send_stat_error");
+  const textEl = $("#send_progress_text");
+  const section = $("#send_job_progress_section");
+  const fillEl = $("#send_progress_fill");
+  if (qEl) qEl.textContent = queued;
+  if (sEl) sEl.textContent = sent;
+  if (oEl) oEl.textContent = ok;
+  if (eEl) eEl.textContent = error;
+  if (section) section.style.display = "block";
+  if (fillEl) fillEl.style.width = percent + "%";
+
+  let statusText = "";
+  if (isFinished) {
+    statusText = `✅ Completado: ${ok} OK, ${error} errores`;
+    stopSendProgressPolling();
+  } else if (sent > 0) {
+    statusText = `🚀 Procesando: ${completed}/${total} (${percent}%)`;
+  } else if (queued > 0) {
+    statusText = `⏳ En cola: ${queued} pendientes`;
+  } else {
+    statusText = total > 0 ? "Esperando..." : "—";
+  }
+  if (textEl) textEl.textContent = statusText;
+}
+
+async function refreshSendJobProgress() {
+  const data = await new Promise((r) => chrome.storage.local.get({ last_send_job_id: null }, (d) => r(d)));
+  const jobId = data.last_send_job_id;
+  if (!jobId) return null;
   const cfg = await loadSettings();
-  if (!cfg.api_base) return [];
-  
+  if (!cfg.api_base) return null;
   const headers = await getAuthHeaders(cfg);
-  const url = new URL(`/ext/analyze/${encodeURIComponent(analyzeJobId)}/profiles`, cfg.api_base).toString();
-  
-  try {
-    const resp = await fetch(url, { headers });
-    if (!resp.ok) return [];
-    const data = await resp.json();
-    return data.profiles || [];
-  } catch (e) {
-    console.error("[loadAnalyzedProfiles] Error:", e);
-    return [];
+  const stats = await fetchJobSummary(cfg, headers, jobId);
+  if (stats && !stats._error) {
+    updateSendJobProgress(stats);
+    return stats;
+  }
+  return null;
+}
+
+let sendProgressInterval = null;
+const SEND_PROGRESS_POLL_MS = 4000;
+
+function startSendProgressPolling() {
+  stopSendProgressPolling();
+  sendProgressInterval = setInterval(async () => {
+    const stats = await refreshSendJobProgress();
+    if (stats) {
+      const queued = stats.queued || 0;
+      const sent = stats.sent || 0;
+      if (queued === 0 && sent === 0) stopSendProgressPolling();
+    }
+  }, SEND_PROGRESS_POLL_MS);
+}
+
+function stopSendProgressPolling() {
+  if (sendProgressInterval) {
+    clearInterval(sendProgressInterval);
+    sendProgressInterval = null;
   }
 }
 
-function renderProfilesList(profiles) {
-  const container = $("#profiles_list");
-  if (!container) return;
-  
-  if (!profiles || profiles.length === 0) {
-    container.innerHTML = '<div class="muted" style="text-align: center; padding: 20px;">No hay perfiles disponibles</div>';
+async function loadFollowingsJobsForSend() {
+  const cfg = await loadSettings();
+  if (!cfg.api_base) {
+    setSendStatus("Configura la API en Opciones.", true);
     return;
   }
-  
-  selectedProfiles = new Set(profiles.map(p => p.username));
-  
-  container.innerHTML = profiles.map(p => `
-    <div class="profile-item">
-      <label style="display: flex; align-items: center; margin: 0; cursor: pointer;">
-        <input type="checkbox" class="profile-checkbox" data-username="${p.username}" checked>
-        <span style="margin-left: 4px;">@${p.username}</span>
-      </label>
-      <span style="color: #666;">
-        ${p.followers ? `${formatNumber(p.followers)} seg` : ''}
-        ${p.verified ? '✓' : ''}
-      </span>
-    </div>
-  `).join('');
-  
-  // Event listeners para checkboxes
-  container.querySelectorAll('.profile-checkbox').forEach(cb => {
-    cb.addEventListener('change', (e) => {
-      if (e.target.checked) {
-        selectedProfiles.add(e.target.dataset.username);
-      } else {
-        selectedProfiles.delete(e.target.dataset.username);
-      }
+  const base = (cfg.api_base || "").trim().replace(/\/$/, "");
+  if (!base) {
+    setSendStatus("URL de API vacía. Configura en Opciones.", true);
+    return;
+  }
+  const headers = await getAuthHeaders(cfg);
+  const url = new URL("/ext/jobs", base);
+  url.searchParams.set("limit", "20");
+  const sel = $("#send_followings_job_select");
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— Cargando... —</option>';
+  setSendStatus("Cargando jobs de followings...");
+  try {
+    const resp = await fetch(url.toString(), { headers });
+    const text = await resp.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (_) {
+      data = { detail: text || "Sin respuesta" };
+    }
+    if (!resp.ok) {
+      const msg = data.detail || (typeof data.detail === "string" ? data.detail : resp.statusText) || `HTTP ${resp.status}`;
+      sel.innerHTML = '<option value="">— Error —</option>';
+      setSendStatus(`Error ${resp.status}: ${msg}. Revisa token y URL (${base}) en Opciones.`, true);
+      return;
+    }
+    const allJobs = data.jobs || [];
+    const jobs = allJobs.filter((j) => (j.kind || "") === "fetch_followings");
+    sel.innerHTML = '<option value="">— Selecciona un job de followings —</option>';
+    jobs.forEach((j) => {
+      const opt = document.createElement("option");
+      opt.value = j.id;
+      opt.textContent = `${j.id} (${j.status || ""})`;
+      sel.appendChild(opt);
     });
-  });
+    selectedSendJobId = null;
+    selectedSendUsernames = [];
+    $("#send_followings_info").style.display = "none";
+    if (jobs.length === 0) {
+      setSendStatus("No hay jobs de followings. Extrae followings en la pestaña Extraer.", true);
+    } else {
+      setSendStatus(`${jobs.length} job(s) de followings. Elige uno.`);
+    }
+  } catch (e) {
+    console.error("[loadFollowingsJobsForSend]", e);
+    sel.innerHTML = '<option value="">— Error al cargar —</option>';
+    setSendStatus("Error de red o CORS. ¿API en " + base + "? Revisa Opciones.", true);
+  }
 }
 
-function formatNumber(num) {
-  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
-  if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
-  return num.toString();
+async function onSendFollowingsJobChange(jobId) {
+  if (!jobId) {
+    selectedSendJobId = null;
+    selectedSendUsernames = [];
+    $("#send_followings_info").style.display = "none";
+    return;
+  }
+  const cfg = await loadSettings();
+  if (!cfg.api_base) return;
+  const headers = await getAuthHeaders(cfg);
+  const url = new URL(`/ext/jobs/${encodeURIComponent(jobId)}/followings-recipients`, cfg.api_base).toString();
+  setSendStatus("Cargando destinatarios...");
+  try {
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) {
+      const text = await resp.text();
+      let d; try { d = JSON.parse(text); } catch { d = {}; }
+      setSendStatus(`Error: ${d.detail || text}`, true);
+      return;
+    }
+    const data = await resp.json();
+    selectedSendJobId = jobId;
+    selectedSendUsernames = data.usernames || [];
+    const total = data.total || 0;
+    const already = data.already_sent_count || 0;
+    const pending = data.pending_count ?? (total - already);
+    $("#send_followings_summary").textContent =
+      `${total} followings · ${already} ya enviados · ${pending} pendientes`;
+    $("#send_followings_info").style.display = "block";
+    setSendStatus(pending > 0 ? `Listo: ${pending} pendientes de recibir mensaje` : "Todos ya recibieron mensaje.");
+  } catch (e) {
+    console.error("[onSendFollowingsJobChange]", e);
+    setSendStatus("Error al cargar destinatarios", true);
+  }
 }
 
 async function enqueueSendMessages() {
   const cfg = await loadSettings();
   if (!cfg.api_base) return setSendStatus("Configura la API en Opciones.", true);
   if (!cfg.x_account) return setSendStatus("Configura tu X-Account en Opciones.", true);
-  
-  const usernames = Array.from(selectedProfiles);
-  if (usernames.length === 0) return setSendStatus("Selecciona al menos un perfil.", true);
-  
+  if (!selectedSendJobId || !selectedSendUsernames.length) {
+    return setSendStatus("Elige un job de followings primero.", true);
+  }
+
   const message = $("#send_message").value.trim();
   if (!message) return setSendStatus("Escribe un mensaje.", true);
   if (message.length < 10) return setSendStatus("El mensaje es muy corto (mínimo 10 caracteres).", true);
   if (message.length > 1000) return setSendStatus("El mensaje es muy largo (máximo 1000 caracteres).", true);
-  
+
+  const dryRun = $("#dry_run") ? $("#dry_run").checked : true;
+  if (!dryRun) {
+    if (!confirm("Vas a enviar mensajes realmente. ¿Continuar?")) return;
+  }
+
   const headers = await getAuthHeaders(cfg);
   const url = new URL("/ext/send/enqueue", cfg.api_base).toString();
-  
-  setSendStatus("Encolando mensajes...");
-  
+  setSendStatus("Encolando mensajes (solo pendientes)...");
+
   try {
     const resp = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        usernames: usernames,
+        usernames: selectedSendUsernames,
         message_template: message,
-        source_job_id: currentJobId,
-        dry_run: true,  // SIEMPRE dry_run por ahora
+        source_job_id: selectedSendJobId,
+        dry_run: dryRun,
       }),
     });
-    
+
     const text = await resp.text();
     let data;
     try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    
+
     if (!resp.ok) {
       console.error("[enqueue send] HTTP", resp.status, data);
       return setSendStatus(`Error ${resp.status}: ${data?.detail || text}`, true);
     }
-    
+
     const jobId = data?.job_id || "(sin id)";
-    const total = data?.total_items || usernames.length;
-    const dailyRemaining = data?.daily_remaining || '-';
-    const hourlyRemaining = data?.hourly_remaining || '-';
-    
-    // Actualizar límites
+    const total = data?.total_items || 0;
+    const dailyRemaining = data?.daily_remaining || "-";
+    const hourlyRemaining = data?.hourly_remaining || "-";
+
     $("#limit_daily").textContent = dailyRemaining;
     $("#limit_hourly").textContent = hourlyRemaining;
-    
-    // Guardar job_id de envío
     chrome.storage.local.set({ last_send_job_id: jobId });
-    
-    setSendStatus(`✅ Encolados ${total} mensajes (Job: ${jobId})`);
-    
+
+    setSendStatus(`✅ Encolados ${total} mensajes (solo pendientes). Job: ${jobId}`);
+    onSendFollowingsJobChange(selectedSendJobId);
+    const stats = await refreshSendJobProgress();
+    if (stats && ((stats.queued || 0) + (stats.sent || 0) > 0)) startSendProgressPolling();
   } catch (e) {
     console.error("[enqueue send] Error:", e);
     setSendStatus("Error de red. Verifica la conexión.", true);
   }
 }
 
+let senderStatusInterval = null;
+
+function stopSenderStatusPolling() {
+  if (senderStatusInterval) {
+    clearInterval(senderStatusInterval);
+    senderStatusInterval = null;
+  }
+}
+
 async function updateSenderStatus() {
   try {
     const status = await chrome.runtime.sendMessage({ action: 'get_sender_status' });
-    
     if (!status) return;
-    
-    const badge = $("#sender_status_badge");
-    const timer = $("#sender_timer");
-    const stats = $("#sender_stats");
     const startBtn = $("#start_sender");
     const stopBtn = $("#stop_sender");
-    
     if (status.isRunning) {
-      badge.className = "badge running";
-      badge.textContent = "🔄 Ejecutando";
-      timer.style.display = "block";
-      timer.textContent = status.timeUntilNextFormatted || "00:00";
-      stats.style.display = "block";
-      startBtn.disabled = true;
-      stopBtn.disabled = false;
+      if (startBtn) startBtn.disabled = true;
+      if (stopBtn) stopBtn.disabled = false;
     } else {
-      badge.className = "badge stopped";
-      badge.textContent = "⏹️ Detenido";
-      timer.style.display = "none";
-      stats.style.display = "none";
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
+      stopSenderStatusPolling();
+      if (startBtn) startBtn.disabled = false;
+      if (stopBtn) stopBtn.disabled = true;
     }
-    
-    $("#sender_session_count").textContent = status.sessionCount || 0;
-    
   } catch (e) {
     console.error("[updateSenderStatus] Error:", e);
+    stopSenderStatusPolling();
   }
 }
 
@@ -558,7 +709,7 @@ async function stopSender() {
     setSendStatus("Deteniendo sender...");
     const result = await chrome.runtime.sendMessage({ action: 'stop_sender' });
     if (result?.status === 'stopped') {
-      setSendStatus("⏹️ Sender detenido");
+      setSendStatus("Listo");
       updateSenderStatus();
     }
   } catch (e) {
@@ -595,39 +746,27 @@ async function main() {
     });
   }
   
-  const checkStatusBtn = $("#check_status");
-  if (checkStatusBtn) {
-    checkStatusBtn.addEventListener("click", async () => {
-      setStatus("Verificando estado...");
-      const stats = await checkJobStatus();
+  // Selector últimos 5 jobs (Extraer): al cambiar, ver estado del job seleccionado
+  const lastJobsSelect = $("#last_jobs_select");
+  if (lastJobsSelect) {
+    lastJobsSelect.addEventListener("change", async () => {
+      const jid = lastJobsSelect.value;
+      if (!jid) {
+        $("#job_progress").style.display = "none";
+        return;
+      }
+      currentJobId = jid;
+      setStatus("Cargando estado...");
+      const stats = await checkJobStatus(jid);
       if (stats) {
         updateJobProgress(stats);
         setStatus(`Actualizado: ${new Date().toLocaleTimeString()}`);
+      } else {
+        $("#job_progress").style.display = "none";
       }
     });
   }
   
-  // Botón para iniciar flujo de envío
-  const startSendFlowBtn = $("#start_send_flow");
-  if (startSendFlowBtn) {
-    startSendFlowBtn.addEventListener("click", async () => {
-      const analyzeJobId = startSendFlowBtn.dataset.analyzeJobId;
-      if (analyzeJobId) {
-        // Cambiar a tab de envío
-        $$('.tab').forEach(t => t.classList.remove('active'));
-        $$('.tab-content').forEach(c => c.classList.remove('active'));
-        $('[data-tab="send"]').classList.add('active');
-        $('#tab-send').classList.add('active');
-        
-        // Cargar perfiles
-        setSendStatus("Cargando perfiles analizados...");
-        const profiles = await loadAnalyzedProfiles(analyzeJobId);
-        renderProfilesList(profiles);
-        $("#send_profiles_section").style.display = "block";
-        setSendStatus(`${profiles.length} perfiles cargados`);
-      }
-    });
-  }
   
   // Tab 2: Send DMs
   const sendMessageInput = $("#send_message");
@@ -638,70 +777,63 @@ async function main() {
     });
   }
   
-  const selectAllBtn = $("#select_all_profiles");
-  if (selectAllBtn) {
-    selectAllBtn.addEventListener("click", () => {
-      $$('.profile-checkbox').forEach(cb => {
-        cb.checked = true;
-        selectedProfiles.add(cb.dataset.username);
-      });
+  const sendFollowingsSelect = $("#send_followings_job_select");
+  if (sendFollowingsSelect) {
+    sendFollowingsSelect.addEventListener("change", () => {
+      onSendFollowingsJobChange(sendFollowingsSelect.value);
     });
   }
-  
-  const deselectAllBtn = $("#deselect_all_profiles");
-  if (deselectAllBtn) {
-    deselectAllBtn.addEventListener("click", () => {
-      $$('.profile-checkbox').forEach(cb => {
-        cb.checked = false;
-        selectedProfiles.delete(cb.dataset.username);
-      });
-    });
-  }
-  
+
   const enqueueSendBtn = $("#enqueue_send");
   if (enqueueSendBtn) {
     enqueueSendBtn.addEventListener("click", enqueueSendMessages);
   }
-  
+
   const startSenderBtn = $("#start_sender");
   if (startSenderBtn) {
     startSenderBtn.addEventListener("click", startSender);
   }
-  
+
   const stopSenderBtn = $("#stop_sender");
   if (stopSenderBtn) {
     stopSenderBtn.addEventListener("click", stopSender);
   }
   
-  // Cargar último job
-  chrome.storage.local.get({ last_job_id: null }, (data) => {
-    if (data.last_job_id) {
-      showJobStatusSection(data.last_job_id);
-    }
-  });
+  // Cargar datos de la pestaña activa al abrir (Extraer por defecto)
+  loadLastJobs(5);
+  updateSenderStatus();
   
   // Mostrar info de config
   const env = $("#env");
   const authInfo = cfg.use_jwt ? " (JWT)" : cfg.auth_mode === "bearer" ? " (Bearer)" : " (X-Api-Key)";
-  const clientInfo = cfg.x_client_id ? ` — ClientId: ${cfg.x_client_id}` : "";
+  const clientId = cfg.x_client_id || cfg.client_id;
+  const clientInfo = clientId ? ` — ClientId: ${clientId}` : "";
   const accountInfo = cfg.x_account ? ` — Cuenta: ${cfg.x_account}` : "";
   env.textContent = cfg.api_base 
     ? `API: ${cfg.api_base}${authInfo}${accountInfo}${clientInfo}` 
     : "API sin configurar";
   
-  // Escuchar actualizaciones del background
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'dm_status_update') {
-      const data = message.data;
-      if (data.lastUsername) {
-        $("#sender_last_username").textContent = `@${data.lastUsername}`;
-      }
-      $("#sender_session_count").textContent = data.sessionCount || 0;
       updateSenderStatus();
+      refreshSendJobProgress();
+    }
+  });
+
+  window.addEventListener("pagehide", () => {
+    stopSenderStatusPolling();
+    stopSendProgressPolling();
+  });
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      stopSenderStatusPolling();
+      stopSendProgressPolling();
+    } else {
+      updateSenderStatus();
+      refreshSendJobProgress();
     }
   });
   
-  // Actualizar estado del sender al abrir
   updateSenderStatus();
 }
 

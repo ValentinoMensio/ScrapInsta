@@ -120,3 +120,62 @@ Esta extensión está diseñada para trabajar con **ScrapInsta V2**. Endpoints e
 - **GET** `/jobs/{job_id}/summary` - Resumen de job (para seguimiento de progreso)
 
 Ver [README del backend](../ScrapInsta_V2/README.md) para más detalles sobre la API.
+
+---
+
+## 📬 Envío de mensajes (DM)
+
+El envío de DMs se hace desde **instagram.com/direct** (inbox), no desde el perfil:
+
+1. La extensión abre **instagram.com/direct/**
+2. Busca al usuario en el buscador (`input[placeholder="Search"]`)
+3. Abre la conversación (enlace a `/direct/t/...` o botón "Message")
+4. Escribe en la caja de mensaje (contenteditable / Lexical)
+5. Pulsa **Send** (botón detectado por `svg[aria-label="Send"]` dentro de `div[role="button"]`)
+
+Así se evita depender del botón "Message" del perfil, que cambia más a menudo en el DOM.
+
+---
+
+## 🐛 Cómo ver qué pasa al enviar mensajes (debug)
+
+El envío de DMs usa **dos contextos**: el **Service Worker** (background) y el **content script** en la pestaña de Instagram. Para ver el error hay que abrir **dos consolas**.
+
+### 1. Logs del Service Worker (background)
+
+1. Abre `chrome://extensions`
+2. Localiza **ScrapInsta Enqueuer** y haz clic en **“Service worker”** (o “Inspeccionar vistas: background page”)
+3. Se abre DevTools con la consola del background
+4. Ahí verás:
+   - `[BG] Task obtenida:` cuando hay una tarea
+   - `[BG] Enviando mensaje send_dm al content script...`
+   - `[BG] Resultado del content script:` (éxito o fallo)
+   - Si falla: `[BG] send_dm falló: <error> steps: [...]`
+
+### 2. Logs del content script (pestaña Instagram)
+
+1. **Abre una pestaña** en `https://www.instagram.com` (o el perfil donde se envía el DM)
+2. Pulsa **F12** (o clic derecho → Inspeccionar) para abrir DevTools **en esa pestaña**
+3. Ve a la pestaña **Console**
+4. Cuando la extensión intente enviar un DM verás:
+   - `[ScrapInsta] ========== sendDM INICIO ==========`
+   - `[ScrapInsta] Paso 1: navegar al perfil`
+   - `[ScrapInsta] Paso 2: click en botón Message`
+   - Si algo falla: `[ScrapInsta] ERROR: ...` o `[ScrapInsta] TIMEOUT: no se encontró ...`
+   - Al final: `[ScrapInsta] ========== sendDM FIN ========== success: false error: message_button_not_found steps: [...]`
+
+### Qué mirar según el síntoma
+
+| Síntoma | Dónde mirar | Qué suele ser |
+|--------|-------------|----------------|
+| “Entra al perfil y no hace nada” | Consola de **Instagram** (content script) | Si ves `Paso 2: click en botón Message` y luego `TIMEOUT: no se encontró botón Message` → Instagram cambió el DOM; hay que actualizar los selectores del botón “Message”. |
+| No aparece ningún log `[ScrapInsta]` en Instagram | Service Worker + pestaña | El content script no se inyectó: comprueba que la URL sea `*://www.instagram.com/*` y recarga la pestaña de Instagram. |
+| Error en el background al enviar mensaje | Consola del **Service Worker** | `Could not establish connection. Receiving end does not exist` → la pestaña se cerró o el content script no está listo; a veces ayuda aumentar la espera antes de `sendMessage`. |
+
+### Orden recomendado al debugear
+
+1. Abre **primero** la pestaña de Instagram y su DevTools (consola).
+2. Abre **después** la consola del Service Worker.
+3. Desde el popup, inicia el envío o usa “Procesar ahora”.
+4. Observa en la consola de **Instagram** en qué paso se queda (Paso 1, Paso 2, etc.) y si aparece `ERROR` o `TIMEOUT`.
+5. El `error` y `steps` del resultado en el Service Worker te dicen hasta qué paso llegó el content script.

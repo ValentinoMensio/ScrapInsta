@@ -7,7 +7,7 @@ import json
 import re
 from uuid import uuid4
 
-from fastapi import APIRouter, Header, Path, Request
+from fastapi import APIRouter, Header, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from scrapinsta.crosscutting.logging_config import get_logger, bind_request_context
@@ -72,6 +72,27 @@ class JobSummaryResponse(BaseModel):
     sent: int
     ok: int
     error: int
+
+
+class JobListItem(BaseModel):
+    id: str
+    kind: str
+    status: str
+    created_at: str
+
+
+class JobsListResponse(BaseModel):
+    jobs: List[JobListItem]
+
+
+class FollowingsRecipientsResponse(BaseModel):
+    """Usernames de followings de un job fetch_followings para usar como destinatarios de DM."""
+    job_id: str
+    target_username: str
+    usernames: List[str]
+    total: int
+    already_sent_count: int
+    pending_count: int
 
 
 # =====================================================
@@ -449,6 +470,26 @@ def enqueue_send_message(
             total_items=len(filtered_usernames),
             client_id=client_id,
         )
+        # Crear una task por username para que el frontend pueda hacer pull vía /api/send/pull.
+        # El envío lo hace la extensión desde la cuenta del cliente; los workers no participan.
+        base_payload = {
+            "message_template": message,
+            "client_account": client_account,
+            "source_job_id": body.source_job_id,
+            "dry_run": body.dry_run,
+        }
+        for username in filtered_usernames:
+            task_id = f"{job_id}:send_message:{username}"
+            payload = {**base_payload, "target_username": username}
+            job_store.add_task(
+                job_id=job_id,
+                task_id=task_id,
+                correlation_id=job_id,
+                account_id=client_account,
+                username=username,
+                payload=payload,
+                client_id=client_id,
+            )
     except Exception as e:
         raise InternalServerError(f"create_job failed: {e}", error_code="DATABASE_ERROR", cause=e)
     
@@ -579,4 +620,85 @@ def job_summary(
         return JobSummaryResponse(**safe)
     except Exception as e:
         raise InternalServerError(f"job_summary failed: {e}", error_code="DATABASE_ERROR", cause=e)
+
+
+@router.get("/ext/jobs", response_model=JobsListResponse)
+def list_jobs(
+    limit: int = Query(5, ge=1, le=20),
+    kind: Optional[str] = Query(None, description="Filtrar por tipo: fetch_followings, analyze_profile, send_message"),
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+    x_client_id: Optional[str] = Header(None),
+    request: Request = None,
+):
+    """Lista los últimos jobs del cliente, más recientes primero."""
+    enforce_https(request)
+    client = authenticate_client(x_api_key, authorization, x_client_id)
+    rate_limit(client, request)
+    client_id = client.get("id")
+    deps = _get_deps_from_request(request)
+    job_store = deps.job_store
+    rows = job_store.list_jobs_by_client(client_id, limit=limit, kind=kind)
+    return JobsListResponse(jobs=[JobListItem(**r) for r in rows])
+
+
+@router.get("/ext/jobs/{job_id}/followings-recipients", response_model=FollowingsRecipientsResponse)
+def get_followings_recipients(
+    job_id: str = Path(..., min_length=1, max_length=MAX_JOB_ID_LENGTH),
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+    x_account: Optional[str] = Header(None),
+    x_client_id: Optional[str] = Header(None),
+    request: Request = None,
+):
+    """
+    Para un job fetch_followings, devuelve los usernames extraídos (followings del target).
+    Incluye cuántos ya recibieron mensaje de esta cuenta para mostrar pendientes.
+    """
+    enforce_https(request)
+    client = authenticate_client(x_api_key, authorization, x_client_id)
+    rate_limit(client, request)
+    client_id = client.get("id")
+    client_account = get_client_account(x_account)
+    deps = _get_deps_from_request(request)
+    job_store = deps.job_store
+
+    job_client_id = job_store.get_job_client_id(job_id)
+    if not job_client_id:
+        raise JobNotFoundError(f"Job '{job_id}' no encontrado")
+    if job_client_id != client_id:
+        raise JobOwnershipError(
+            f"El job '{job_id}' no pertenece al cliente",
+            details={"job_id": job_id, "client_id": client_id},
+        )
+
+    meta = job_store.get_job_metadata(job_id)
+    if (meta.get("kind") or "") != "fetch_followings":
+        raise BadRequestError(
+            "El job no es de tipo fetch_followings",
+            details={"job_id": job_id, "kind": meta.get("kind")},
+        )
+
+    extra = meta.get("extra") or {}
+    target_username = (extra.get("target_username") or "").strip().lower()
+    if not target_username:
+        raise BadRequestError("El job no tiene target_username en extra", details={"job_id": job_id})
+
+    usernames = job_store.get_followings_for_owner(target_username, limit=500)
+    already_sent = 0
+    for u in usernames:
+        try:
+            if job_store.was_message_sent(client_account, u):
+                already_sent += 1
+        except Exception:
+            pass
+    pending_count = len(usernames) - already_sent
+    return FollowingsRecipientsResponse(
+        job_id=job_id,
+        target_username=target_username,
+        usernames=usernames,
+        total=len(usernames),
+        already_sent_count=already_sent,
+        pending_count=pending_count,
+    )
 

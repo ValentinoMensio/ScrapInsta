@@ -117,6 +117,12 @@ db-reset: ## Resetear base de datos (¡CUIDADO!)
 db-shell: ## Conectar a la base de datos
 	@$(DOCKER_COMPOSE) exec db mysql -u app -papp_password scrapinsta
 
+db-clear-except-clients: ## Borrar todos los datos excepto clients y client_limits
+	@echo "$(RED)⚠️ Se borrarán jobs, job_tasks, messages_sent, profiles, profile_analysis, followings. Se mantienen clients y client_limits.$(NC)"
+	@read -p "¿Continuar? (y/N): " confirm && [ "$$confirm" = "y" ] || exit 1
+	@$(DOCKER_COMPOSE) exec -T db mysql -u app -papp_password scrapinsta < ops/db/clear_except_clients.sql
+	@echo "$(GREEN)✓ Base de datos limpiada (clientes conservados)$(NC)"
+
 # =============================================================================
 # TESTING
 # =============================================================================

@@ -490,6 +490,35 @@ class JobStoreSQL(JobStorePort):
         finally:
             self._return(con)
 
+    def list_jobs_by_client(
+        self, client_id: str, limit: int = 5, kind: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Últimos jobs del cliente, más recientes primero. Opcionalmente filtrar por kind."""
+        sql = (
+            "SELECT id, kind, status, created_at FROM jobs WHERE client_id=%s "
+            + ("AND kind=%s " if kind else "")
+            + "ORDER BY created_at DESC LIMIT %s"
+        )
+        params: tuple = (client_id, kind, limit) if kind else (client_id, limit)
+        con = self._connect()
+        try:
+            with con.cursor() as cur:
+                self._execute_query(cur, sql, params, "select", "jobs")
+                rows = cur.fetchall() or []
+                con.commit()
+                out = []
+                for r in rows:
+                    ca = r.get("created_at")
+                    out.append({
+                        "id": r.get("id"),
+                        "kind": r.get("kind"),
+                        "status": r.get("status"),
+                        "created_at": ca.isoformat() if hasattr(ca, "isoformat") else str(ca),
+                    })
+                return out
+        finally:
+            self._return(con)
+
     def job_summary(self, job_id: str, client_id: Optional[str] = None) -> Dict[str, Any]:
         """Resumen de cantidades por estado para un job dado."""
         if client_id:
