@@ -702,3 +702,70 @@ def get_followings_recipients(
         pending_count=pending_count,
     )
 
+
+@router.get("/ext/jobs/{job_id}/analyze-recipients", response_model=FollowingsRecipientsResponse)
+def get_analyze_recipients(
+    job_id: str = Path(..., min_length=1, max_length=MAX_JOB_ID_LENGTH),
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+    x_account: Optional[str] = Header(None),
+    x_client_id: Optional[str] = Header(None),
+    request: Request = None,
+):
+    """
+    Para un job analyze_profile, devuelve los usernames analizados (completados).
+    Incluye cuántos ya recibieron mensaje de esta cuenta para mostrar pendientes.
+    Permite enviar DMs a ese usuario o grupo tras un análisis.
+    """
+    enforce_https(request)
+    client = authenticate_client(x_api_key, authorization, x_client_id)
+    rate_limit(client, request)
+    client_id = client.get("id")
+    client_account = get_client_account(x_account)
+    deps = _get_deps_from_request(request)
+    job_store = deps.job_store
+
+    job_client_id = job_store.get_job_client_id(job_id)
+    if not job_client_id:
+        alt_job_id = f"analyze:{job_id}" if not job_id.startswith("analyze:") else None
+        if alt_job_id:
+            job_client_id = job_store.get_job_client_id(alt_job_id)
+            if job_client_id:
+                job_id = alt_job_id
+    if not job_client_id:
+        raise JobNotFoundError(f"Job '{job_id}' no encontrado")
+    if job_client_id != client_id:
+        raise JobOwnershipError(
+            f"El job '{job_id}' no pertenece al cliente",
+            details={"job_id": job_id, "client_id": client_id},
+        )
+
+    meta = job_store.get_job_metadata(job_id)
+    if (meta.get("kind") or "") != "analyze_profile":
+        raise BadRequestError(
+            "El job no es de tipo analyze_profile",
+            details={"job_id": job_id, "kind": meta.get("kind")},
+        )
+
+    try:
+        usernames = job_store.get_completed_usernames(job_id)
+    except Exception as e:
+        raise InternalServerError(f"Error obteniendo usernames del job: {e}", error_code="DATABASE_ERROR", cause=e)
+
+    already_sent = 0
+    for u in usernames:
+        try:
+            if job_store.was_message_sent(client_account, u):
+                already_sent += 1
+        except Exception:
+            pass
+    pending_count = len(usernames) - already_sent
+    return FollowingsRecipientsResponse(
+        job_id=job_id,
+        target_username="",
+        usernames=usernames,
+        total=len(usernames),
+        already_sent_count=already_sent,
+        pending_count=pending_count,
+    )
+

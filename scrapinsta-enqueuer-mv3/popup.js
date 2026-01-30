@@ -119,7 +119,7 @@ function initTabs() {
       }
       if (tab.dataset.tab === 'send') {
         updateSenderStatus();
-        loadFollowingsJobsForSend();
+        loadRecipientsJobsForSend();
         const stats = await refreshSendJobProgress();
         if (stats && ((stats.queued || 0) + (stats.sent || 0) > 0)) startSendProgressPolling();
       }
@@ -136,7 +136,8 @@ function initTabs() {
 
 async function enqueue() {
   const cfg = await loadSettings();
-  const mode = ("#mode" in window ? $("#mode").value : "followings");
+  const modeEl = $("#mode");
+  const mode = modeEl ? modeEl.value : "followings";
   if (!cfg.api_base) return setStatus("Configura la API en Opciones.", true);
   if (!cfg.api_token && !cfg.use_jwt) return setStatus("Configura tu API token en Opciones.", true);
 
@@ -187,14 +188,18 @@ async function enqueue() {
     return;
   }
 
-  // analyze
-  const raw = $("#usernames").value || "";
+  // analyze (solo si se llegó aquí por modo analyze)
+  await doEnqueueAnalyze(cfg, headers);
+}
+
+async function doEnqueueAnalyze(cfg, headers) {
+  const raw = ($("#usernames") && $("#usernames").value) || "";
   const usernames = raw
     .split(/[\n,]/)
     .map((s) => s.trim().toLowerCase())
     .filter((s) => s.length > 0);
   if (usernames.length === 0) return setStatus("Ingresá al menos un username.", true);
-  let batchSize = parseInt($("#batch_size").value, 10);
+  let batchSize = parseInt($("#batch_size")?.value || "25", 10);
   if (!Number.isFinite(batchSize) || batchSize <= 0) batchSize = 25;
   const url = new URL("/ext/analyze/enqueue", cfg.api_base).toString();
   setStatus("Enviando…");
@@ -213,7 +218,6 @@ async function enqueue() {
     const jobId = data?.job_id || "(sin id)";
     const totalItems = data?.total_items || usernames.length;
     setStatus(`Encolado analyze ✅ Job: ${jobId} (${totalItems} perfiles)`);
-    
     if (jobId && jobId !== "(sin id)") {
       showJobStatusSection(jobId);
       setTimeout(async () => {
@@ -229,8 +233,9 @@ async function enqueue() {
 
 function setStatus(msg, isErr = false) {
   const el = $("#status");
+  if (!el) return;
   el.textContent = msg;
-  el.className = isErr ? "err" : "ok";
+  el.className = isErr ? "status-line err" : "status-line ok";
 }
 
 let currentJobId = null;
@@ -243,13 +248,46 @@ function showJobStatusSection(jobId) {
     if (Array.from(sel.options).every(o => o.value !== jobId)) {
       const opt = document.createElement("option");
       opt.value = jobId;
-      opt.textContent = jobId;
+      opt.textContent = "Recién encolado";
       sel.appendChild(opt);
     }
     sel.value = jobId;
   }
   $("#job_progress").style.display = "none";
   chrome.storage.local.set({ last_job_id: jobId });
+}
+
+function formatJobKindLabel(kind) {
+  const map = { fetch_followings: "Followings", analyze_profile: "Análisis", send_message: "Envío" };
+  return map[kind] || kind || "—";
+}
+
+function formatJobStatusLabel(status) {
+  const map = { completed: "Completado", running: "En curso", failed: "Fallido", queued: "En cola" };
+  return map[status] || status || "—";
+}
+
+function formatJobDate(createdAt) {
+  if (!createdAt) return "";
+  try {
+    const d = new Date(createdAt);
+    if (isNaN(d.getTime())) return "";
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const h = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    return `${day}/${month} ${h}:${min}`;
+  } catch {
+    return "";
+  }
+}
+
+function formatJobOptionLabel(job) {
+  const kindLabel = formatJobKindLabel(job.kind || "");
+  const statusLabel = formatJobStatusLabel((job.status || "").toLowerCase());
+  const dateStr = formatJobDate(job.created_at);
+  const parts = [kindLabel, statusLabel, dateStr].filter(Boolean);
+  return parts.length ? parts.join(" · ") : job.id;
 }
 
 async function loadLastJobs(limit = 5) {
@@ -262,16 +300,19 @@ async function loadLastJobs(limit = 5) {
     const resp = await fetch(url.toString(), { headers });
     if (!resp.ok) return;
     const data = await resp.json();
-    const jobs = data.jobs || [];
+    const allJobs = data.jobs || [];
+    const jobs = allJobs.filter((j) => {
+      const k = j.kind || "";
+      return k === "fetch_followings" || k === "analyze_profile";
+    });
     const sel = $("#last_jobs_select");
     if (!sel) return;
     sel.innerHTML = '<option value="">— Selecciona un job —</option>';
     jobs.forEach((j) => {
       const opt = document.createElement("option");
       opt.value = j.id;
-      const kind = j.kind || "";
-      const status = j.status || "";
-      opt.textContent = `${j.id} (${kind} ${status})`;
+      opt.textContent = formatJobOptionLabel(j);
+      opt.dataset.kind = j.kind || "";
       sel.appendChild(opt);
     });
     const saved = await new Promise((r) => chrome.storage.local.get({ last_job_id: null }, (d) => r(d.last_job_id)));
@@ -420,13 +461,14 @@ function stopAutoRefresh() {
 // =====================================================
 
 let selectedSendJobId = null;
+let selectedSendKind = null; // "fetch_followings" | "analyze_profile"
 let selectedSendUsernames = [];
 
 function setSendStatus(msg, isErr = false) {
   const el = $("#send_status");
   if (el) {
     el.textContent = msg;
-    el.className = isErr ? "err" : "ok";
+    el.className = isErr ? "status-line err" : "status-line ok";
   }
 }
 
@@ -506,7 +548,7 @@ function stopSendProgressPolling() {
   }
 }
 
-async function loadFollowingsJobsForSend() {
+async function loadRecipientsJobsForSend() {
   const cfg = await loadSettings();
   if (!cfg.api_base) {
     setSendStatus("Configura la API en Opciones.", true);
@@ -520,10 +562,10 @@ async function loadFollowingsJobsForSend() {
   const headers = await getAuthHeaders(cfg);
   const url = new URL("/ext/jobs", base);
   url.searchParams.set("limit", "20");
-  const sel = $("#send_followings_job_select");
+  const sel = $("#send_recipients_job_select");
   if (!sel) return;
   sel.innerHTML = '<option value="">— Cargando... —</option>';
-  setSendStatus("Cargando jobs de followings...");
+  setSendStatus("Cargando jobs...");
   try {
     const resp = await fetch(url.toString(), { headers });
     const text = await resp.text();
@@ -540,40 +582,53 @@ async function loadFollowingsJobsForSend() {
       return;
     }
     const allJobs = data.jobs || [];
-    const jobs = allJobs.filter((j) => (j.kind || "") === "fetch_followings");
-    sel.innerHTML = '<option value="">— Selecciona un job de followings —</option>';
+    const jobs = allJobs.filter((j) => {
+      const k = j.kind || "";
+      return k === "fetch_followings" || k === "analyze_profile";
+    });
+    sel.innerHTML = '<option value="">— Selecciona followings o análisis —</option>';
     jobs.forEach((j) => {
       const opt = document.createElement("option");
       opt.value = j.id;
-      opt.textContent = `${j.id} (${j.status || ""})`;
+      opt.textContent = formatJobOptionLabel(j);
+      opt.dataset.kind = j.kind || "";
       sel.appendChild(opt);
     });
     selectedSendJobId = null;
+    selectedSendKind = null;
     selectedSendUsernames = [];
-    $("#send_followings_info").style.display = "none";
+    $("#send_recipients_info").style.display = "none";
     if (jobs.length === 0) {
-      setSendStatus("No hay jobs de followings. Extrae followings en la pestaña Extraer.", true);
+      setSendStatus("No hay jobs de followings ni de análisis. Usa la pestaña Extraer primero.", true);
     } else {
-      setSendStatus(`${jobs.length} job(s) de followings. Elige uno.`);
+      setSendStatus(`${jobs.length} job(s). Elige uno para enviar DMs.`);
     }
   } catch (e) {
-    console.error("[loadFollowingsJobsForSend]", e);
+    console.error("[loadRecipientsJobsForSend]", e);
     sel.innerHTML = '<option value="">— Error al cargar —</option>';
     setSendStatus("Error de red o CORS. ¿API en " + base + "? Revisa Opciones.", true);
   }
 }
 
-async function onSendFollowingsJobChange(jobId) {
+async function onSendRecipientsJobChange(jobIdOrNull, kindOrNull) {
+  const jobId = jobIdOrNull || ($("#send_recipients_job_select") && $("#send_recipients_job_select").value) || null;
+  const sel = $("#send_recipients_job_select");
+  const kind = kindOrNull || (sel && sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].dataset.kind) || null;
   if (!jobId) {
     selectedSendJobId = null;
+    selectedSendKind = null;
     selectedSendUsernames = [];
-    $("#send_followings_info").style.display = "none";
+    $("#send_recipients_info").style.display = "none";
     return;
   }
   const cfg = await loadSettings();
   if (!cfg.api_base) return;
   const headers = await getAuthHeaders(cfg);
-  const url = new URL(`/ext/jobs/${encodeURIComponent(jobId)}/followings-recipients`, cfg.api_base).toString();
+  const isAnalyze = (kind || "").toLowerCase().includes("analyze");
+  const path = isAnalyze
+    ? `/ext/jobs/${encodeURIComponent(jobId)}/analyze-recipients`
+    : `/ext/jobs/${encodeURIComponent(jobId)}/followings-recipients`;
+  const url = new URL(path, cfg.api_base).toString();
   setSendStatus("Cargando destinatarios...");
   try {
     const resp = await fetch(url, { headers });
@@ -585,16 +640,18 @@ async function onSendFollowingsJobChange(jobId) {
     }
     const data = await resp.json();
     selectedSendJobId = jobId;
+    selectedSendKind = kind || (isAnalyze ? "analyze_profile" : "fetch_followings");
     selectedSendUsernames = data.usernames || [];
     const total = data.total || 0;
     const already = data.already_sent_count || 0;
     const pending = data.pending_count ?? (total - already);
-    $("#send_followings_summary").textContent =
-      `${total} followings · ${already} ya enviados · ${pending} pendientes`;
-    $("#send_followings_info").style.display = "block";
+    const label = isAnalyze ? "perfiles" : "followings";
+    $("#send_recipients_summary").textContent =
+      `${total} ${label} · ${already} ya enviados · ${pending} pendientes`;
+    $("#send_recipients_info").style.display = "block";
     setSendStatus(pending > 0 ? `Listo: ${pending} pendientes de recibir mensaje` : "Todos ya recibieron mensaje.");
   } catch (e) {
-    console.error("[onSendFollowingsJobChange]", e);
+    console.error("[onSendRecipientsJobChange]", e);
     setSendStatus("Error al cargar destinatarios", true);
   }
 }
@@ -604,7 +661,7 @@ async function enqueueSendMessages() {
   if (!cfg.api_base) return setSendStatus("Configura la API en Opciones.", true);
   if (!cfg.x_account) return setSendStatus("Configura tu X-Account en Opciones.", true);
   if (!selectedSendJobId || !selectedSendUsernames.length) {
-    return setSendStatus("Elige un job de followings primero.", true);
+    return setSendStatus("Elige un job (followings o análisis) primero.", true);
   }
 
   const message = $("#send_message").value.trim();
@@ -652,7 +709,7 @@ async function enqueueSendMessages() {
     chrome.storage.local.set({ last_send_job_id: jobId });
 
     setSendStatus(`✅ Encolados ${total} mensajes (solo pendientes). Job: ${jobId}`);
-    onSendFollowingsJobChange(selectedSendJobId);
+    onSendRecipientsJobChange(selectedSendJobId, selectedSendKind);
     const stats = await refreshSendJobProgress();
     if (stats && ((stats.queued || 0) + (stats.sent || 0) > 0)) startSendProgressPolling();
   } catch (e) {
@@ -733,9 +790,20 @@ async function main() {
   $("#limit").value = cfg.default_limit || 50;
   $("#target").focus();
   $("#enqueue").addEventListener("click", enqueue);
-  
+
   const enqueueAnalyzeBtn = $("#enqueue_analyze");
-  if (enqueueAnalyzeBtn) enqueueAnalyzeBtn.addEventListener("click", enqueue);
+  if (enqueueAnalyzeBtn) {
+    enqueueAnalyzeBtn.addEventListener("click", async () => {
+      const cfg = await loadSettings();
+      if (!cfg.api_base) return setStatus("Configura la API en Opciones.", true);
+      if (!cfg.api_token && !cfg.use_jwt) return setStatus("Configura tu API token en Opciones.", true);
+      const headers = await getAuthHeaders(cfg);
+      if (!headers["Authorization"] && !headers["X-Api-Key"]) {
+        return setStatus("Falta token de autenticación. Configura en Opciones.", true);
+      }
+      await doEnqueueAnalyze(cfg, headers);
+    });
+  }
   
   const modeSel = $("#mode");
   if (modeSel) {
@@ -777,10 +845,10 @@ async function main() {
     });
   }
   
-  const sendFollowingsSelect = $("#send_followings_job_select");
-  if (sendFollowingsSelect) {
-    sendFollowingsSelect.addEventListener("change", () => {
-      onSendFollowingsJobChange(sendFollowingsSelect.value);
+  const sendRecipientsSelect = $("#send_recipients_job_select");
+  if (sendRecipientsSelect) {
+    sendRecipientsSelect.addEventListener("change", () => {
+      onSendRecipientsJobChange(sendRecipientsSelect.value, sendRecipientsSelect.options[sendRecipientsSelect.selectedIndex]?.dataset?.kind);
     });
   }
 
@@ -805,13 +873,25 @@ async function main() {
   
   // Mostrar info de config
   const env = $("#env");
-  const authInfo = cfg.use_jwt ? " (JWT)" : cfg.auth_mode === "bearer" ? " (Bearer)" : " (X-Api-Key)";
-  const clientId = cfg.x_client_id || cfg.client_id;
-  const clientInfo = clientId ? ` — ClientId: ${clientId}` : "";
-  const accountInfo = cfg.x_account ? ` — Cuenta: ${cfg.x_account}` : "";
-  env.textContent = cfg.api_base 
-    ? `API: ${cfg.api_base}${authInfo}${accountInfo}${clientInfo}` 
-    : "API sin configurar";
+  const apiDot = $("#apiDot");
+  const apiText = $("#apiText");
+  
+  if (env) {
+    const shortApi = cfg.api_base ? cfg.api_base.replace(/^https?:\/\//, "").split("/")[0] : "—";
+    const account = cfg.x_account || "—";
+    env.textContent = `API: ${shortApi} | Cuenta: ${account}`;
+  }
+  
+  if (apiDot && apiText) {
+    if (cfg.api_base && cfg.api_token) {
+      apiDot.classList.add("ok");
+      apiDot.classList.remove("err");
+      apiText.textContent = "Conectado";
+    } else {
+      apiDot.classList.remove("ok", "err");
+      apiText.textContent = "Sin configurar";
+    }
+  }
   
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'dm_status_update') {

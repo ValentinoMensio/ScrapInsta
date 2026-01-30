@@ -1,113 +1,388 @@
 <!doctype html>
-<html>
+<html lang="es">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Opciones Enqueuer</title>
+  <title>Opciones - ScrapInsta</title>
   <style>
-    :root {
-      --ig1: #405DE6; --ig2: #5851DB; --ig3: #833AB4; --ig4: #C13584; --ig5: #E1306C; --ig6: #FD1D1D; --ig7: #FCAF45;
-      --panel-bg: rgba(255,255,255,0.9);
-      --panel-border: rgba(255,255,255,0.6);
+    :root{
+      --bg: #0b1020;
+      --border: rgba(255,255,255,0.10);
+      --text: rgba(255,255,255,0.92);
+      --muted: rgba(255,255,255,0.62);
+      --muted2: rgba(255,255,255,0.48);
+
+      --primary: #7c3aed;
+      --primary2: #ec4899;
+      --success: #22c55e;
+      --danger:  #ef4444;
+      --warn:    #f59e0b;
+
+      --shadow: 0 14px 38px rgba(0,0,0,0.45);
+      --radius: 16px;
+      --ring: 0 0 0 3px rgba(236,72,153,0.18);
     }
-    body {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial;
+
+    html, body {
       margin: 0;
+      padding: 0;
       min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial;
+    }
+
+    body::before{
+      content:"";
+      position: fixed;
+      inset: 0;
       background:
-        radial-gradient(40% 60% at 0% -10%, rgba(64,93,230,0.25), transparent 60%),
-        radial-gradient(45% 60% at 120% 0%, rgba(225,48,108,0.22), transparent 60%),
-        linear-gradient(135deg, var(--ig1), var(--ig3), var(--ig5), var(--ig7));
-      background-size: cover;
-      padding: 24px;
+        radial-gradient(700px 400px at 15% 10%, rgba(124,58,237,0.35), transparent 60%),
+        radial-gradient(700px 500px at 85% 20%, rgba(236,72,153,0.25), transparent 55%),
+        radial-gradient(800px 600px at 50% 95%, rgba(34,197,94,0.10), transparent 60%),
+        linear-gradient(180deg, rgba(255,255,255,0.04), transparent 35%);
+      pointer-events: none;
+      filter: saturate(1.05);
+    }
+
+    .container{
+      position: relative;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 22px 18px 28px;
       box-sizing: border-box;
     }
-    .panel {
-      max-width: 820px; margin: 0 auto;
-      background: var(--panel-bg);
-      border: 1px solid var(--panel-border);
-      border-radius: 16px;
-      box-shadow: 0 10px 28px rgba(0,0,0,0.2);
-      padding: 20px;
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
+
+    .panel{
+      background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.06));
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      border-radius: var(--radius);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      overflow: hidden;
     }
-    h1 { margin: 0 0 12px; font-size: 22px; background: linear-gradient(90deg, var(--ig3), var(--ig5)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-    p { color: #333; }
-    label { display: block; margin: 12px 0 6px; font-weight: 600; color: #222; }
-    input, select, button { width: 100%; padding: 10px; border: 1px solid #d9d9d9; border-radius: 10px; box-sizing: border-box; background: #fff; }
-    input:focus, select:focus { outline: none; border-color: #C13584; box-shadow: 0 0 0 2px rgba(193,53,132,0.18); }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
-    button { cursor: pointer; color: #fff; border: none; background: linear-gradient(90deg, var(--ig3), var(--ig5)); }
-    button:hover { filter: brightness(1.03); }
-    small { color: #555; }
-    code { background: #f5f5f5; padding: 2px 6px; border-radius: 6px; }
+
+    /* Header igual popup */
+    .header{
+      padding: 16px 18px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .brand{
+      display: flex;
+      flex-direction: column;
+      line-height: 1.1;
+    }
+    .brand .title{
+      font-size: 18px;
+      font-weight: 900;
+      letter-spacing: 0.2px;
+      background: linear-gradient(90deg, var(--primary), var(--primary2));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      margin: 0;
+    }
+    .brand .subtitle{
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    .status-pill{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.22);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .dot{
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.35);
+      box-shadow: 0 0 0 3px rgba(255,255,255,0.08);
+    }
+    .dot.ok{ background: var(--success); box-shadow: 0 0 0 3px rgba(34,197,94,0.18); }
+    .dot.err{ background: var(--danger);  box-shadow: 0 0 0 3px rgba(239,68,68,0.18); }
+    .dot.warn{ background: var(--warn);   box-shadow: 0 0 0 3px rgba(245,158,11,0.18); }
+
+    .content{
+      padding: 16px 18px 18px;
+    }
+
+    .section{
+      background: rgba(0,0,0,0.20);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .section-title{
+      font-size: 13px;
+      font-weight: 900;
+      margin: 0 0 10px;
+      color: rgba(255,255,255,0.90);
+      letter-spacing: 0.2px;
+    }
+
+    p, .hint{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 0;
+    }
+    .hint{ margin-top: 8px; }
+
+    label{
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 800;
+      margin: 12px 0 6px;
+    }
+
+    input, select, button{
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(20,20,30,0.95);
+      color: rgba(255,255,255,0.92);
+      padding: 11px 11px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    select{
+      background: rgba(20,20,30,0.98);
+      color: #fff;
+      cursor: pointer;
+    }
+    select option{
+      background: #1a1a2e;
+      color: #fff;
+      padding: 8px;
+    }
+
+    input::placeholder{ color: rgba(255,255,255,0.35); }
+
+    input:focus, select:focus{
+      border-color: rgba(236,72,153,0.50);
+      box-shadow: var(--ring);
+    }
+
+    input[readonly]{
+      background: rgba(255,255,255,0.05);
+      color: var(--muted);
+    }
+
+    .grid{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 720px){
+      .grid{ grid-template-columns: 1fr; }
+    }
+
+    .row{
+      display: grid;
+      grid-template-columns: 1fr 160px;
+      gap: 12px;
+      align-items: end;
+    }
+    @media (max-width: 520px){
+      .row{ grid-template-columns: 1fr; }
+    }
+
+    .btn{
+      cursor: pointer;
+      border: none;
+      font-weight: 900;
+      transition: transform 0.08s, filter 0.2s, opacity 0.2s;
+    }
+    .btn:active{ transform: translateY(0.5px); }
+    .btn.primary{
+      background: linear-gradient(90deg, rgba(124,58,237,0.95), rgba(236,72,153,0.95));
+      color: white;
+    }
+    .btn.secondary{
+      background: rgba(255,255,255,0.10);
+      color: rgba(255,255,255,0.92);
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .btn:hover{ filter: brightness(1.05); }
+    .btn:disabled{ opacity: 0.55; cursor: not-allowed; }
+
+    .check{
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.05);
+      margin-top: 10px;
+      color: rgba(255,255,255,0.86);
+      font-size: 13px;
+    }
+    .check input{ width: auto; margin-top: 2px; }
+    .check-label{ font-weight: 900; margin-bottom: 4px; }
+    .check-hint{ color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    .divider{
+      height: 1px;
+      background: rgba(255,255,255,0.08);
+      margin: 14px 0;
+    }
+
+    .status-line{
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .status-line.ok{ color: rgba(34,197,94,0.95); }
+    .status-line.err{ color: rgba(239,68,68,0.95); }
+
+    code{
+      background: rgba(255,255,255,0.08);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.82);
+    }
+
+    .footer-note{
+      padding: 12px 18px 14px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      font-size: 11px;
+      color: var(--muted2);
+      background: rgba(0,0,0,0.18);
+      text-align: center;
+    }
   </style>
 </head>
+
 <body>
-  <div class="panel">
-    <h1>Configuración</h1>
-    <p>Este panel guarda credenciales en <code>chrome.storage.sync</code> (sin encriptar, uso local). En producción, limitá <b>host_permissions</b> del <code>manifest.json</code> al dominio de tu API.</p>
-
-    <label>API Base URL</label>
-    <input id="api_base" placeholder="https://api.tu-dominio.com" />
-
-    <label>
-      <input type="checkbox" id="use_jwt" style="width: auto; margin-right: 8px;" />
-      Usar autenticación JWT (recomendado)
-    </label>
-    <small>Si está activado, el sistema obtendrá automáticamente un token JWT usando tu API key.</small>
-
-    <div id="auth_mode_group">
-      <div class="grid">
-        <div>
-          <label>Auth mode</label>
-          <select id="auth_mode">
-            <option value="x-api-key">X-Api-Key</option>
-            <option value="bearer">Authorization: Bearer</option>
-          </select>
+  <div class="container">
+    <div class="panel">
+      <div class="header">
+        <div class="brand">
+          <div class="title">ScrapInsta</div>
+          <div class="subtitle">Opciones de la extensión (se guarda en <code>chrome.storage.sync</code>)</div>
         </div>
-        <div>
-          <label>Token / API Key</label>
-          <input id="api_token" placeholder="tu_token_secreto" />
+        <div class="status-pill" id="cfgStatus">
+          <span class="dot" id="cfgDot"></span>
+          <span id="cfgText">Sin configurar</span>
         </div>
       </div>
-    </div>
 
-    <div id="jwt_info" style="display: none;">
-      <label>API Key (para obtener JWT)</label>
-      <input id="api_token_jwt" placeholder="tu_api_key" />
-      <small>Esta API key se usará para obtener el token JWT automáticamente.</small>
-      
-      <label style="margin-top: 12px;">Client ID (se obtiene automáticamente al hacer login)</label>
-      <input id="client_id" placeholder="Se llenará automáticamente" readonly />
-      <button id="test_login" type="button" style="margin-top: 8px;">Probar Login JWT</button>
-      <input id="login_result" readonly placeholder="Resultado del login…" style="margin-top: 8px;" />
-    </div>
+      <div class="content">
 
-    <label>Tu cuenta Instagram (X-Account)</label>
-    <input id="x_account" placeholder="mi_usuario_instagram" />
+        <div class="section">
+          <p class="section-title">Conexión API</p>
 
-    <label>Client ID (X-Client-Id) <small>(opcional)</small></label>
-    <input id="x_client_id" placeholder="cliente_1" />
+          <label for="api_base">API Base URL</label>
+          <input id="api_base" placeholder="https://api.tu-dominio.com" />
 
-    <div class="row">
-      <div>
-        <label>Límite por defecto</label>
-        <input id="default_limit" type="number" min="1" step="1" value="50" />
+          <div class="check">
+            <input type="checkbox" id="use_jwt" />
+            <div>
+              <div class="check-label">Usar autenticación JWT</div>
+              <div class="check-hint">Si está activado, se obtiene un JWT automáticamente usando tu API key.</div>
+            </div>
+          </div>
+
+          <div id="auth_mode_group">
+            <div class="grid">
+              <div>
+                <label for="auth_mode">Modo de autenticación</label>
+                <select id="auth_mode">
+                  <option value="x-api-key">X-Api-Key</option>
+                  <option value="bearer">Authorization: Bearer</option>
+                </select>
+              </div>
+              <div>
+                <label for="api_token">Token / API Key</label>
+                <input id="api_token" placeholder="tu_token_secreto" type="password" />
+              </div>
+            </div>
+            <p class="hint">Tip: si usás multi-tenant, cargá también <b>X-Account</b> y opcional <b>X-Client-Id</b>.</p>
+          </div>
+
+          <div id="jwt_info" style="display:none;">
+            <label for="api_token_jwt">API Key (para obtener JWT)</label>
+            <input id="api_token_jwt" placeholder="tu_api_key" type="password" />
+
+            <div class="grid">
+              <div>
+                <label for="client_id">Client ID (auto)</label>
+                <input id="client_id" placeholder="Se llena con el login" readonly />
+              </div>
+              <div>
+                <label for="login_result">Resultado login</label>
+                <input id="login_result" readonly placeholder="—" />
+              </div>
+            </div>
+
+            <button id="test_login" class="btn secondary" style="margin-top: 10px;">Probar Login JWT</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <p class="section-title">Cuenta Instagram</p>
+
+          <label for="x_account">X-Account (cuenta remitente)</label>
+          <input id="x_account" placeholder="mi_usuario_instagram" />
+
+          <label for="x_client_id">X-Client-Id (opcional)</label>
+          <input id="x_client_id" placeholder="cliente_1" />
+
+          <p class="hint">Se envía en headers para multi-tenancy (si lo usás).</p>
+        </div>
+
+        <div class="section">
+          <p class="section-title">Preferencias</p>
+
+          <div class="row">
+            <div>
+              <label for="default_limit">Límite por defecto</label>
+              <input id="default_limit" type="number" min="1" step="1" value="50" />
+            </div>
+            <button id="save" class="btn primary">Guardar</button>
+          </div>
+
+          <div class="status-line" id="save_status">—</div>
+        </div>
+
+        <div class="section">
+          <p class="section-title">Prueba de conexión</p>
+          <p class="hint">Verifica tu API con GET <code>/health</code>.</p>
+
+          <div class="row" style="margin-top: 10px;">
+            <input id="health_result" readonly placeholder="Resultado…" />
+            <button id="test" class="btn secondary">Probar</button>
+          </div>
+        </div>
+
       </div>
-      <button id="save" style="margin-top: 24px;">Guardar</button>
-    </div>
 
-    <h3>Prueba rápida</h3>
-    <p>Verifica conexión con tu API (GET <code>/health</code>):</p>
-    <div class="row">
-      <input id="health_result" readonly placeholder="Resultado…" />
-      <button id="test">Probar</button>
+      <div class="footer-note">
+        En producción, limita <code>host_permissions</code> del <code>manifest.json</code> al dominio de tu API.
+      </div>
     </div>
-
-    <script src="options.js"></script>
   </div>
+
+  <script src="options.js"></script>
 </body>
 </html>
