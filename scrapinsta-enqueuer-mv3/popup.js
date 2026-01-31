@@ -586,22 +586,53 @@ async function loadRecipientsJobsForSend() {
       const k = j.kind || "";
       return k === "fetch_followings" || k === "analyze_profile";
     });
-    sel.innerHTML = '<option value="">— Selecciona followings o análisis —</option>';
-    jobs.forEach((j) => {
+    
+    // Filtrar jobs que tienen pendientes (no todos enviados)
+    sel.innerHTML = '<option value="">— Verificando pendientes... —</option>';
+    setSendStatus("Verificando jobs con pendientes...");
+    
+    const jobsWithPending = [];
+    for (const j of jobs) {
+      const isAnalyze = (j.kind || "").toLowerCase().includes("analyze");
+      const path = isAnalyze
+        ? `/ext/jobs/${encodeURIComponent(j.id)}/analyze-recipients`
+        : `/ext/jobs/${encodeURIComponent(j.id)}/followings-recipients`;
+      try {
+        const resp = await fetch(new URL(path, base).toString(), { headers });
+        if (resp.ok) {
+          const info = await resp.json();
+          const pending = info.pending_count ?? (info.total - (info.already_sent_count || 0));
+          if (pending > 0) {
+            jobsWithPending.push({ ...j, pending, total: info.total || 0 });
+          }
+        }
+      } catch (e) {
+        // Si falla, incluir el job por las dudas
+        jobsWithPending.push(j);
+      }
+    }
+    
+    sel.innerHTML = '<option value="">— Elegí un origen de destinatarios —</option>';
+    jobsWithPending.forEach((j) => {
       const opt = document.createElement("option");
       opt.value = j.id;
-      opt.textContent = formatJobOptionLabel(j);
+      const pendingInfo = j.pending ? ` (${j.pending} pendientes)` : "";
+      opt.textContent = formatJobOptionLabel(j) + pendingInfo;
       opt.dataset.kind = j.kind || "";
       sel.appendChild(opt);
     });
     selectedSendJobId = null;
     selectedSendKind = null;
     selectedSendUsernames = [];
-    $("#send_recipients_info").style.display = "none";
-    if (jobs.length === 0) {
-      setSendStatus("No hay jobs de followings ni de análisis. Usa la pestaña Extraer primero.", true);
+    if ($("#send_recipients_info")) $("#send_recipients_info").style.display = "none";
+    if (jobsWithPending.length === 0) {
+      if (jobs.length === 0) {
+        setSendStatus("No hay jobs. Extrae followings o analiza perfiles primero.", true);
+      } else {
+        setSendStatus("Todos los destinatarios ya recibieron mensaje.", false);
+      }
     } else {
-      setSendStatus(`${jobs.length} job(s). Elige uno para enviar DMs.`);
+      setSendStatus(`${jobsWithPending.length} job(s) con pendientes. Elegí uno.`);
     }
   } catch (e) {
     console.error("[loadRecipientsJobsForSend]", e);
@@ -618,7 +649,7 @@ async function onSendRecipientsJobChange(jobIdOrNull, kindOrNull) {
     selectedSendJobId = null;
     selectedSendKind = null;
     selectedSendUsernames = [];
-    $("#send_recipients_info").style.display = "none";
+    if ($("#send_recipients_info")) $("#send_recipients_info").style.display = "none";
     return;
   }
   const cfg = await loadSettings();
@@ -646,9 +677,10 @@ async function onSendRecipientsJobChange(jobIdOrNull, kindOrNull) {
     const already = data.already_sent_count || 0;
     const pending = data.pending_count ?? (total - already);
     const label = isAnalyze ? "perfiles" : "followings";
-    $("#send_recipients_summary").textContent =
-      `${total} ${label} · ${already} ya enviados · ${pending} pendientes`;
-    $("#send_recipients_info").style.display = "block";
+    const summaryEl = $("#send_recipients_summary");
+    const infoEl = $("#send_recipients_info");
+    if (summaryEl) summaryEl.textContent = `${total} ${label} · ${already} ya enviados · ${pending} pendientes`;
+    if (infoEl) infoEl.style.display = "block";
     setSendStatus(pending > 0 ? `Listo: ${pending} pendientes de recibir mensaje` : "Todos ya recibieron mensaje.");
   } catch (e) {
     console.error("[onSendRecipientsJobChange]", e);
@@ -779,17 +811,85 @@ async function stopSender() {
 // INICIALIZACIÓN
 // =====================================================
 
+function openOptions() {
+  if (chrome.runtime.openOptionsPage) {
+    chrome.runtime.openOptionsPage();
+  } else {
+    window.open(chrome.runtime.getURL('options.html'));
+  }
+}
+
+function updateSetupChecklist(cfg) {
+  const checkApi = $("#check-api");
+  const checkToken = $("#check-token");
+  const checkAccount = $("#check-account");
+  
+  if (checkApi) {
+    const hasApi = !!cfg.api_base;
+    checkApi.className = `checklist-item ${hasApi ? "ok" : "missing"}`;
+    checkApi.querySelector(".check-icon").textContent = hasApi ? "✓" : "✗";
+  }
+  if (checkToken) {
+    const hasToken = !!cfg.api_token;
+    checkToken.className = `checklist-item ${hasToken ? "ok" : "missing"}`;
+    checkToken.querySelector(".check-icon").textContent = hasToken ? "✓" : "✗";
+  }
+  if (checkAccount) {
+    const hasAccount = !!cfg.x_account;
+    checkAccount.className = `checklist-item ${hasAccount ? "ok" : "missing"}`;
+    checkAccount.querySelector(".check-icon").textContent = hasAccount ? "✓" : "✗";
+  }
+}
+
+function isConfigComplete(cfg) {
+  return !!(cfg.api_base && cfg.api_token && cfg.x_account);
+}
+
 async function main() {
   // Cargar settings
   const cfg = await loadSettings();
+  
+  const setupScreen = $("#setup-screen");
+  const mainUi = $("#main-ui");
+  const configOk = isConfigComplete(cfg);
+  
+  // Mostrar setup o main UI
+  if (setupScreen && mainUi) {
+    if (configOk) {
+      setupScreen.style.display = "none";
+      mainUi.style.display = "flex";
+    } else {
+      setupScreen.style.display = "flex";
+      mainUi.style.display = "none";
+      updateSetupChecklist(cfg);
+    }
+  }
+  
+  // Botón "Configurar" en setup screen
+  const btnOpenOptions = $("#btn-open-options");
+  if (btnOpenOptions) {
+    btnOpenOptions.addEventListener("click", openOptions);
+  }
+  
+  // Status pill clickable (abre opciones)
+  const apiStatus = $("#apiStatus");
+  if (apiStatus) {
+    apiStatus.addEventListener("click", openOptions);
+  }
+  
+  // Footer clickable (abre opciones)
+  const footerNote = $("#footer-note");
+  if (footerNote) {
+    footerNote.addEventListener("click", openOptions);
+  }
   
   // Init tabs
   initTabs();
   
   // Tab 1: Fetch/Analyze
-  $("#limit").value = cfg.default_limit || 50;
-  $("#target").focus();
-  $("#enqueue").addEventListener("click", enqueue);
+  if ($("#limit")) $("#limit").value = cfg.default_limit || 50;
+  if ($("#target")) $("#target").focus();
+  if ($("#enqueue")) $("#enqueue").addEventListener("click", enqueue);
 
   const enqueueAnalyzeBtn = $("#enqueue_analyze");
   if (enqueueAnalyzeBtn) {
@@ -809,18 +909,18 @@ async function main() {
   if (modeSel) {
     modeSel.addEventListener("change", () => {
       const m = modeSel.value;
-      $("#followings_fields").style.display = m === "followings" ? "block" : "none";
-      $("#analyze_fields").style.display = m === "analyze" ? "block" : "none";
+      if ($("#followings_fields")) $("#followings_fields").style.display = m === "followings" ? "block" : "none";
+      if ($("#analyze_fields")) $("#analyze_fields").style.display = m === "analyze" ? "block" : "none";
     });
   }
   
-  // Selector últimos 5 jobs (Extraer): al cambiar, ver estado del job seleccionado
+  // Selector últimos 5 jobs (Extraer)
   const lastJobsSelect = $("#last_jobs_select");
   if (lastJobsSelect) {
     lastJobsSelect.addEventListener("change", async () => {
       const jid = lastJobsSelect.value;
       if (!jid) {
-        $("#job_progress").style.display = "none";
+        if ($("#job_progress")) $("#job_progress").style.display = "none";
         return;
       }
       currentJobId = jid;
@@ -830,18 +930,17 @@ async function main() {
         updateJobProgress(stats);
         setStatus(`Actualizado: ${new Date().toLocaleTimeString()}`);
       } else {
-        $("#job_progress").style.display = "none";
+        if ($("#job_progress")) $("#job_progress").style.display = "none";
       }
     });
   }
-  
   
   // Tab 2: Send DMs
   const sendMessageInput = $("#send_message");
   if (sendMessageInput) {
     sendMessageInput.addEventListener("input", () => {
       const count = sendMessageInput.value.length;
-      $("#message_char_count").textContent = count;
+      if ($("#message_char_count")) $("#message_char_count").textContent = count;
     });
   }
   
@@ -853,23 +952,19 @@ async function main() {
   }
 
   const enqueueSendBtn = $("#enqueue_send");
-  if (enqueueSendBtn) {
-    enqueueSendBtn.addEventListener("click", enqueueSendMessages);
-  }
+  if (enqueueSendBtn) enqueueSendBtn.addEventListener("click", enqueueSendMessages);
 
   const startSenderBtn = $("#start_sender");
-  if (startSenderBtn) {
-    startSenderBtn.addEventListener("click", startSender);
-  }
+  if (startSenderBtn) startSenderBtn.addEventListener("click", startSender);
 
   const stopSenderBtn = $("#stop_sender");
-  if (stopSenderBtn) {
-    stopSenderBtn.addEventListener("click", stopSender);
-  }
+  if (stopSenderBtn) stopSenderBtn.addEventListener("click", stopSender);
   
-  // Cargar datos de la pestaña activa al abrir (Extraer por defecto)
-  loadLastJobs(5);
-  updateSenderStatus();
+  // Solo cargar datos si config está completa
+  if (configOk) {
+    loadLastJobs(5);
+    updateSenderStatus();
+  }
   
   // Mostrar info de config
   const env = $("#env");
@@ -883,13 +978,14 @@ async function main() {
   }
   
   if (apiDot && apiText) {
-    if (cfg.api_base && cfg.api_token) {
+    if (configOk) {
       apiDot.classList.add("ok");
       apiDot.classList.remove("err");
       apiText.textContent = "Conectado";
     } else {
-      apiDot.classList.remove("ok", "err");
-      apiText.textContent = "Sin configurar";
+      apiDot.classList.remove("ok");
+      apiDot.classList.add("err");
+      apiText.textContent = "Configurar";
     }
   }
   
@@ -909,12 +1005,14 @@ async function main() {
       stopSenderStatusPolling();
       stopSendProgressPolling();
     } else {
-      updateSenderStatus();
-      refreshSendJobProgress();
+      if (configOk) {
+        updateSenderStatus();
+        refreshSendJobProgress();
+      }
     }
   });
   
-  updateSenderStatus();
+  if (configOk) updateSenderStatus();
 }
 
 document.addEventListener("DOMContentLoaded", main);

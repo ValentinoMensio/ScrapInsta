@@ -353,16 +353,8 @@
 
         <div class="section">
           <p class="section-title">Preferencias</p>
-
-          <div class="row">
-            <div>
-              <label for="default_limit">Límite por defecto</label>
-              <input id="default_limit" type="number" min="1" step="1" value="50" />
-            </div>
-            <button id="save" class="btn primary">Guardar</button>
-          </div>
-
-          <div class="status-line" id="save_status">—</div>
+          <label for="default_limit">Límite por defecto (followings)</label>
+          <input id="default_limit" type="number" min="1" step="1" value="50" />
         </div>
 
         <div class="section">
@@ -374,6 +366,9 @@
             <button id="test" class="btn secondary">Probar</button>
           </div>
         </div>
+
+        <button id="save" class="btn primary" style="width:100%; margin-top: 4px; padding: 14px;">Guardar configuración</button>
+        <div class="status-line" id="save_status" style="text-align:center;">—</div>
 
       </div>
 
