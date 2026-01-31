@@ -511,6 +511,14 @@
             </div>
 
             <div class="check">
+              <input type="checkbox" id="use_chatgpt" />
+              <div>
+                <div style="font-weight:800; margin-bottom:2px;">Generar mensaje con ChatGPT</div>
+                <div style="color:var(--muted); font-size:11px;">Usa IA para personalizar cada mensaje según el perfil. Configurá el prompt en Opciones.</div>
+              </div>
+            </div>
+
+            <div class="check">
               <input type="checkbox" id="dry_run" checked />
               <div>
                 <div style="font-weight:800; margin-bottom:2px;">Dry-run</div>
@@ -529,11 +537,9 @@
               <div class="progress-text" id="send_progress_text">—</div>
             </div>
 
-            <label for="send_message">Mensaje</label>
+            <label for="send_message" id="send_message_label">Mensaje</label>
             <textarea id="send_message" placeholder="Hola! Me gustaría contactarte..."></textarea>
-            <div class="hint">Caracteres: <span id="message_char_count">0</span>/1000</div>
-
-            <button id="enqueue_send" class="btn success" style="margin-top:10px;">Encolar envío a pendientes</button>
+            <div class="hint" id="send_message_hint">Caracteres: <span id="message_char_count">0</span>/1000</div>
 
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;">
               <button id="start_sender" class="btn primary">Iniciar</button>

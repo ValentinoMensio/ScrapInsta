@@ -18,11 +18,8 @@ VIEWS_FOLLOWER_BUCKETS = (
 VIEWS_BENCHMARK_DEFAULT = 0.04
 
 ENGAGEMENT_SCORE_MAX = 1.0
-SUCCESS_WEIGHT_ENGAGEMENT = 0.5
-SUCCESS_WEIGHT_VIEWS = 0.3
-SUCCESS_WEIGHT_POSTS = 0.2
-POSTS_PER_MONTH_DAYS = 30.0
-POSTS_PER_MONTH_NORMALIZER = 12.0
+SUCCESS_WEIGHT_ENGAGEMENT = 0.6
+SUCCESS_WEIGHT_VIEWS = 0.4
 SCORE_ROUND_DIGITS = 6
 
 # ---------- Benchmarks ----------
@@ -74,26 +71,32 @@ def calculate_engagement_score(profile: Dict[str, Any]) -> float:
     return round(score, SCORE_ROUND_DIGITS)
 
 def calculate_success_score(profile: Dict[str, Any]) -> float:
+    """
+    Calcula un score de éxito combinando engagement y views normalizadas.
+    
+    Pesos: 60% engagement + 40% views
+    
+    Nota: Se eliminó el componente de frecuencia de posts porque no tenemos
+    la fecha de creación de la cuenta ni las fechas de publicación de los posts,
+    lo cual hacía imposible calcular la frecuencia real de publicación.
+    """
     followers = int(profile.get("followers") or 0)
-    posts = int(profile.get("posts") or 0)
     avg_likes = float(profile.get("avg_likes") or 0)
     avg_comments = float(profile.get("avg_comments") or 0)
     avg_views = float(profile.get("avg_views") or 0)
+    
     if followers <= 0:
         return 0.0
 
     engagement = (avg_likes + avg_comments) / followers
     views_rate = avg_views / followers
-    post_month = posts / POSTS_PER_MONTH_DAYS
 
     norm_engagement = min(engagement / get_engagement_benchmark(followers), ENGAGEMENT_SCORE_MAX)
     norm_views = min(views_rate / get_views_benchmark(followers), ENGAGEMENT_SCORE_MAX)
-    norm_post = min(post_month / POSTS_PER_MONTH_NORMALIZER, ENGAGEMENT_SCORE_MAX)
 
     score = (
         SUCCESS_WEIGHT_ENGAGEMENT * norm_engagement
         + SUCCESS_WEIGHT_VIEWS * norm_views
-        + SUCCESS_WEIGHT_POSTS * norm_post
     )
     return round(score, SCORE_ROUND_DIGITS)
 

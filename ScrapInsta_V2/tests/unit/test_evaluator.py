@@ -97,13 +97,12 @@ class TestCalculateEngagementScore:
 
 
 class TestCalculateSuccessScore:
-    """Tests para cálculo de success score."""
+    """Tests para cálculo de success score (60% engagement + 40% views)."""
     
     def test_success_score_zero_followers(self):
         """Success score debe ser 0 si no hay followers."""
         profile = {
             "followers": 0,
-            "posts": 100,
             "avg_likes": 500,
             "avg_comments": 50,
             "avg_views": 5000,
@@ -114,7 +113,6 @@ class TestCalculateSuccessScore:
         """Success score normal."""
         profile = {
             "followers": 10000,
-            "posts": 150,
             "avg_likes": 500,
             "avg_comments": 50,
             "avg_views": 5000,
@@ -127,13 +125,31 @@ class TestCalculateSuccessScore:
         """Success score con engagement alto."""
         profile = {
             "followers": 10000,
-            "posts": 200,
             "avg_likes": 1000,
             "avg_comments": 100,
             "avg_views": 8000,
         }
         score = calculate_success_score(profile)
         assert score > 0.5  # Debe ser alto
+    
+    def test_success_score_ignores_posts(self):
+        """Success score no usa el campo posts (fue eliminado del cálculo)."""
+        profile_with_posts = {
+            "followers": 10000,
+            "posts": 500,  # Muchos posts
+            "avg_likes": 500,
+            "avg_comments": 50,
+            "avg_views": 5000,
+        }
+        profile_without_posts = {
+            "followers": 10000,
+            "posts": 0,  # Sin posts
+            "avg_likes": 500,
+            "avg_comments": 50,
+            "avg_views": 5000,
+        }
+        # Ambos deben dar el mismo resultado
+        assert calculate_success_score(profile_with_posts) == calculate_success_score(profile_without_posts)
 
 
 class TestEvaluateProfile:
@@ -173,11 +189,9 @@ class TestEvaluateProfile:
         assert result is not None
         # Engagement score es 0.0 porque avg_likes + avg_comments = 0
         assert result["engagement_score"] == 0.0
-        # Success score tiene una pequeña contribución de posts (0.2 * norm_post)
-        # norm_post = min(150 / 360.0, 1.0) = 0.4166...
-        # success_score = 0.5 * 0 + 0.3 * 0 + 0.2 * 0.4166... ≈ 0.083333
-        assert result["success_score"] > 0.0
-        assert result["success_score"] < 0.1
+        # Success score es 0.0 porque engagement y views son 0
+        # (posts ya no se usa en el cálculo)
+        assert result["success_score"] == 0.0
     
     def test_evaluate_profile_legacy_keys(self):
         """Evaluación con claves legacy."""

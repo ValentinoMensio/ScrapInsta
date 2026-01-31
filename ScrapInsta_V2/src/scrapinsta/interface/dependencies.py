@@ -17,6 +17,7 @@ from scrapinsta.domain.ports.profile_repo import ProfileRepository
 from scrapinsta.infrastructure.db.job_store_sql import JobStoreSQL
 from scrapinsta.infrastructure.db.client_repo_sql import ClientRepoSQL
 from scrapinsta.infrastructure.db.profile_repo_sql import ProfileRepoSQL
+from scrapinsta.infrastructure.db.connection_provider import ConnectionProvider
 from scrapinsta.infrastructure.redis import RedisClient, DistributedRateLimiter
 from scrapinsta.crosscutting.logging_config import get_logger
 
@@ -90,7 +91,7 @@ class Dependencies:
     def profile_repo(self) -> ProfileRepository:
         """Repositorio de perfiles."""
         if self._profile_repo is None:
-            self._profile_repo = ProfileRepoSQL(self._settings.db_dsn)
+            self._profile_repo = ProfileRepoSQL(ConnectionProvider(self._settings.db_dsn))
             logger.debug("profile_repo_created", db_dsn=self._settings.db_dsn)
         return self._profile_repo
     

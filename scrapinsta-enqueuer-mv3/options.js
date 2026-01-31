@@ -53,15 +53,32 @@ function updateAuthMode() {
   refreshCfgStatus();
 }
 
+function getClientIdEffective() {
+  const src = $("#client_id_source")?.value || "jwt";
+  if (src === "manual") return ($("#client_id_manual")?.value || "").trim();
+  return ($("#client_id")?.value || "").trim();
+}
+
+function updateClientIdUI() {
+  const src = $("#client_id_source")?.value || "jwt";
+  const jwtGroup = $("#client_id_jwt_group");
+  const manualGroup = $("#client_id_manual_group");
+  if (jwtGroup) jwtGroup.style.display = src === "jwt" ? "block" : "none";
+  if (manualGroup) manualGroup.style.display = src === "manual" ? "block" : "none";
+  refreshCfgStatus();
+}
+
 function refreshCfgStatus() {
   const base = normalizeBaseUrl($("#api_base")?.value);
   const useJwt = getUseJwt();
   const token = useJwt ? ($("#api_token_jwt")?.value || "").trim() : ($("#api_token")?.value || "").trim();
   const xAcc = ($("#x_account")?.value || "").trim();
+  const clientId = getClientIdEffective();
 
   if (!base) return setCfgStatus("err", "Falta API Base");
   if (!token) return setCfgStatus("warn", "Falta token");
   if (!xAcc) return setCfgStatus("warn", "Falta X-Account");
+  if (!clientId) return setCfgStatus("warn", "Falta Client ID");
   return setCfgStatus("ok", "Listo");
 }
 
@@ -72,15 +89,22 @@ function load() {
       auth_mode: "x-api-key",
       api_token: "",
       x_account: "",
-      x_client_id: "",
       client_id: "",
+      client_id_manual: "",
+      client_id_source: "jwt",
       default_limit: 50,
+      chatgpt_prompt: "",
 
       use_jwt: false,
       jwt_token: "",
-      jwt_expires_at: 0, // <— popup.js lo usa
+      jwt_expires_at: 0,
     },
     (cfg) => {
+      // Migrar x_client_id legacy
+      if (cfg.x_client_id) {
+        cfg.client_id_manual = cfg.client_id_manual || cfg.x_client_id;
+        cfg.client_id_source = "manual";
+      }
       $("#api_base").value = cfg.api_base || "";
       $("#auth_mode").value = cfg.auth_mode || "x-api-key";
 
@@ -88,24 +112,30 @@ function load() {
       $("#api_token_jwt").value = cfg.api_token || "";
 
       $("#x_account").value = cfg.x_account || "";
-      $("#x_client_id").value = cfg.x_client_id || "";
       $("#default_limit").value = cfg.default_limit || 50;
 
       $("#use_jwt").checked = !!cfg.use_jwt;
-      $("#client_id").value = cfg.client_id || "";
 
-      // Limpio el resultado de login
+      // Client ID unificado: migrar x_client_id legacy
+      const manualVal = cfg.client_id_manual || cfg.x_client_id || "";
+      const jwtVal = cfg.client_id || "";
+      $("#client_id_source").value = cfg.client_id_source || "jwt";
+      $("#client_id").value = jwtVal;
+      $("#client_id_manual").value = manualVal;
+
       if ($("#login_result")) $("#login_result").value = "—";
 
       updateAuthMode();
-      refreshCfgStatus();
+      updateClientIdUI();
 
-      // listeners para status pill live
-      ["api_base","api_token","api_token_jwt","x_account","x_client_id","default_limit","auth_mode"].forEach((id) => {
+      // listeners
+      ["api_base","api_token","api_token_jwt","x_account","client_id_manual","default_limit","chatgpt_prompt","auth_mode"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.addEventListener("input", refreshCfgStatus);
         if (el) el.addEventListener("change", refreshCfgStatus);
       });
+      const srcEl = document.getElementById("client_id_source");
+      if (srcEl) srcEl.addEventListener("change", updateClientIdUI);
     }
   );
 }
@@ -114,6 +144,10 @@ function save() {
   const useJwt = getUseJwt();
   const base = normalizeBaseUrl($("#api_base").value);
   const apiToken = (useJwt ? $("#api_token_jwt").value : $("#api_token").value).trim();
+  const clientIdSource = $("#client_id_source")?.value || "jwt";
+  const clientIdManual = ($("#client_id_manual")?.value || "").trim();
+  const clientIdJwt = ($("#client_id")?.value || "").trim();
+  const clientIdEffective = clientIdSource === "manual" ? clientIdManual : clientIdJwt;
 
   const cfg = {
     api_base: base,
@@ -121,12 +155,15 @@ function save() {
     api_token: apiToken,
 
     x_account: $("#x_account").value.trim(),
-    x_client_id: $("#x_client_id").value.trim(),
+
+    client_id: clientIdEffective,
+    client_id_manual: clientIdManual,
+    client_id_source: clientIdSource,
 
     default_limit: parseInt($("#default_limit").value, 10) || 50,
+    chatgpt_prompt: ($("#chatgpt_prompt").value || "").trim(),
 
     use_jwt: useJwt,
-    client_id: ($("#client_id")?.value || "").trim(),
   };
 
   chrome.storage.sync.set(cfg, () => {
@@ -170,13 +207,16 @@ async function testLogin() {
         jwt_token: data.access_token,
         jwt_expires_at: expiresAt,
         client_id: data.client_id || "",
-        api_token: apiKey, // guardo la api_key usada para JWT
+        client_id_source: "jwt",
+        api_token: apiKey,
         use_jwt: true,
       },
       () => {
         $("#client_id").value = data.client_id || "";
+        $("#client_id_source").value = "jwt";
         $("#use_jwt").checked = true;
         updateAuthMode();
+        updateClientIdUI();
         $("#login_result").value = `✅ Login OK · client_id: ${data.client_id || "—"}`;
         setCfgStatus("ok", "JWT OK");
       }

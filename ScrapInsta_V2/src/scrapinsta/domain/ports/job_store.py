@@ -192,6 +192,15 @@ class JobStorePort(Protocol):
         """Retorna True si cualquier cliente ya envió un mensaje al destino."""
         ...
 
+    def has_active_send_task(
+        self,
+        client_username: str,
+        dest_username: str,
+        client_id: Optional[str] = None,
+    ) -> bool:
+        """True si ya existe una task send_message queued/sent para ese destino."""
+        ...
+
     def count_messages_sent_today(self, client_id: str) -> int:
         """Cuenta mensajes enviados hoy por client_id."""
         ...

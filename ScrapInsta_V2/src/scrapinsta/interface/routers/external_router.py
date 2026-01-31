@@ -19,6 +19,7 @@ from scrapinsta.crosscutting.exceptions import (
 )
 from scrapinsta.interface.auth import authenticate_client, check_scope, enforce_https, get_client_account, rate_limit
 from scrapinsta.interface.dependencies import get_dependencies
+from scrapinsta.infrastructure.ai.chatgpt_openai import OpenAIMessageComposer
 
 logger = get_logger("routers.external")
 
@@ -108,9 +109,11 @@ MAX_CLIENT_MESSAGES_PER_HOUR = int(os.getenv("MAX_CLIENT_MESSAGES_PER_HOUR", "20
 class EnqueueSendRequest(BaseModel):
     """Request para crear un job de envío de mensajes."""
     usernames: List[str] = Field(..., min_length=1, description="Lista de usernames destino")
-    message_template: str = Field(..., min_length=MIN_MESSAGE_LENGTH, max_length=MAX_MESSAGE_LENGTH, description="Mensaje a enviar")
+    message_template: Optional[str] = Field(None, max_length=MAX_MESSAGE_LENGTH, description="Mensaje a enviar (opcional si use_ai)")
     source_job_id: Optional[str] = Field(None, description="Job ID origen (fetch/analyze) para trazabilidad")
     dry_run: bool = Field(default=True, description="Si es True, no envía realmente (para testing)")
+    use_ai: bool = Field(default=False, description="Si True, genera mensaje con ChatGPT usando datos del perfil")
+    client_prompt: Optional[str] = Field(None, max_length=2000, description="Prompt/instrucciones para ChatGPT (requerido si use_ai)")
 
 
 class EnqueueSendResponse(BaseModel):
@@ -355,13 +358,22 @@ def enqueue_send_message(
             details={"count": len(usernames), "max": MAX_SEND_USERNAMES},
         )
     
-    # Validar mensaje
+    # Validar mensaje o uso de IA
+    use_ai = body.use_ai or False
+    client_prompt = (body.client_prompt or "").strip()
     message = (body.message_template or "").strip()
-    if len(message) < MIN_MESSAGE_LENGTH:
-        raise BadRequestError(
-            "message_template muy corto",
-            details={"min": MIN_MESSAGE_LENGTH, "actual": len(message)},
-        )
+
+    if use_ai:
+        if not client_prompt:
+            raise BadRequestError(
+                "client_prompt es requerido cuando use_ai=True. Configurá el prompt en Opciones.",
+            )
+    else:
+        if len(message) < MIN_MESSAGE_LENGTH:
+            raise BadRequestError(
+                "message_template muy corto",
+                details={"min": MIN_MESSAGE_LENGTH, "actual": len(message)},
+            )
     if len(message) > MAX_MESSAGE_LENGTH:
         raise BadRequestError(
             "message_template muy largo",
@@ -427,18 +439,23 @@ def enqueue_send_message(
             hourly_remaining=hourly_remaining,
         )
     
-    # Filtrar usernames a los que ya se les envió (deduplicación)
+    # Filtrar usernames a los que ya se les envió o ya están en cola (deduplicación)
     filtered_usernames = []
     for u in effective_usernames:
         try:
-            if not job_store.was_message_sent(client_account, u):
+            already_sent = job_store.was_message_sent(client_account, u)
+            already_queued = (
+                hasattr(job_store, "has_active_send_task")
+                and job_store.has_active_send_task(client_account, u, client_id=client_id)
+            )
+            if not already_sent and not already_queued:
                 filtered_usernames.append(u)
         except Exception:
             filtered_usernames.append(u)  # En caso de error, incluir
     
     if not filtered_usernames:
         raise BadRequestError(
-            "Todos los usernames ya recibieron mensaje de esta cuenta",
+            "Todos los usernames ya recibieron mensaje o están en cola",
             details={"original_count": len(usernames)},
         )
     
@@ -472,22 +489,68 @@ def enqueue_send_message(
         )
         # Crear una task por username para que el frontend pueda hacer pull vía /api/send/pull.
         # El envío lo hace la extensión desde la cuenta del cliente; los workers no participan.
+        composer = None
+        if use_ai:
+            try:
+                composer = OpenAIMessageComposer()
+            except Exception as e:
+                logger.warning("OpenAIMessageComposer init failed, use_ai disabled: %s", e)
+                use_ai = False
+
         base_payload = {
             "message_template": message,
             "client_account": client_account,
             "source_job_id": body.source_job_id,
             "dry_run": body.dry_run,
         }
+        profile_repo = deps.profile_repo
+        get_profile_fn = getattr(profile_repo, "get_profile", None)
+
         for username in filtered_usernames:
+            msg = message
+            effective_prompt = (client_prompt or "").strip()
+            if message:
+                effective_prompt = (effective_prompt + "\n\nInstrucciones adicionales del usuario: " + message).strip()
+            if use_ai and composer and get_profile_fn and effective_prompt:
+                try:
+                    profile_data = get_profile_fn(username)
+                    p = profile_data or {}
+                    ctx = {
+                        "username": username,
+                        "rubro": p.get("rubro") or "profesional",
+                        "followers": p.get("followers") or 0,
+                        "posts": p.get("posts") or 0,
+                        "engagement_score": p.get("engagement_score") or 0,
+                        "success_score": p.get("success_score") or 0,
+                        "avg_views": p.get("avg_views") or 0,
+                        "bio": p.get("bio") or "",
+                        "following": p.get("following") or 0,
+                        "verified": p.get("verified"),
+                        "private": p.get("private"),
+                    }
+                    generated = composer.compose_message(ctx, custom_prompt=effective_prompt)
+                    if generated and generated.strip():
+                        msg = generated.strip()
+                    else:
+                        msg = f"Hola {username}!"
+                except Exception:
+                    logger.exception("ChatGPT compose failed for %s", username)
+                    msg = message or f"Hola {username}!"
+
+            task_payload = {
+                **base_payload,
+                "message_template": msg,
+                "message_text": msg,  # alias para MessageRequest
+                "target_username": username,
+            }
             task_id = f"{job_id}:send_message:{username}"
-            payload = {**base_payload, "target_username": username}
             job_store.add_task(
                 job_id=job_id,
                 task_id=task_id,
                 correlation_id=job_id,
                 account_id=client_account,
                 username=username,
-                payload=payload,
+                payload=task_payload,
                 client_id=client_id,
             )
     except Exception as e:

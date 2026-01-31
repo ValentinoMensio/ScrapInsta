@@ -151,7 +151,7 @@
       margin: 12px 0 6px;
     }
 
-    input, select, button{
+    input, select, textarea, button{
       width: 100%;
       box-sizing: border-box;
       border-radius: 12px;
@@ -174,9 +174,11 @@
       padding: 8px;
     }
 
-    input::placeholder{ color: rgba(255,255,255,0.35); }
+    input::placeholder, textarea::placeholder{ color: rgba(255,255,255,0.35); }
+    textarea{ resize: vertical; min-height: 100px; }
+    .chatgpt-prompt-ta{ min-height: 160px; resize: vertical; }
 
-    input:focus, select:focus{
+    input:focus, select:focus, textarea:focus{
       border-color: rgba(236,72,153,0.50);
       box-shadow: var(--ring);
     }
@@ -262,6 +264,7 @@
       color: rgba(255,255,255,0.82);
     }
 
+    .client-id-group{ margin-top: 8px; }
     .footer-note{
       padding: 12px 18px 14px;
       border-top: 1px solid rgba(255,255,255,0.08);
@@ -317,7 +320,7 @@
                 <input id="api_token" placeholder="tu_token_secreto" type="password" />
               </div>
             </div>
-            <p class="hint">Tip: si usás multi-tenant, cargá también <b>X-Account</b> y opcional <b>X-Client-Id</b>.</p>
+            <p class="hint">Tip: si usás multi-tenant, cargá también <b>X-Account</b> y <b>Client ID</b>.</p>
           </div>
 
           <div id="jwt_info" style="display:none;">
@@ -325,10 +328,6 @@
             <input id="api_token_jwt" placeholder="tu_api_key" type="password" />
 
             <div class="grid">
-              <div>
-                <label for="client_id">Client ID (auto)</label>
-                <input id="client_id" placeholder="Se llena con el login" readonly />
-              </div>
               <div>
                 <label for="login_result">Resultado login</label>
                 <input id="login_result" readonly placeholder="—" />
@@ -345,16 +344,34 @@
           <label for="x_account">X-Account (cuenta remitente)</label>
           <input id="x_account" placeholder="mi_usuario_instagram" />
 
-          <label for="x_client_id">X-Client-Id (opcional)</label>
-          <input id="x_client_id" placeholder="cliente_1" />
+          <p class="hint">Cuenta desde la que se envían DMs.</p>
 
-          <p class="hint">Se envía en headers para multi-tenancy (si lo usás).</p>
+          <label for="client_id_source">Client ID (multi-tenant)</label>
+          <select id="client_id_source">
+            <option value="jwt">Obtener desde JWT (recomendado)</option>
+            <option value="manual">Manual (solo debug)</option>
+          </select>
+          <div id="client_id_jwt_group" class="client-id-group">
+            <input id="client_id" readonly placeholder="Probar Login JWT para obtener" />
+            <p class="hint">El Client ID se llena al hacer «Probar Login JWT» arriba.</p>
+          </div>
+          <div id="client_id_manual_group" class="client-id-group" style="display:none;">
+            <input id="client_id_manual" placeholder="cliente_1" />
+            <p class="hint">Solo para desarrollo o testing. Los clientes finales usan JWT.</p>
+          </div>
         </div>
 
         <div class="section">
           <p class="section-title">Preferencias</p>
           <label for="default_limit">Límite por defecto (followings)</label>
           <input id="default_limit" type="number" min="1" step="1" value="50" />
+        </div>
+
+        <div class="section section-chatgpt">
+          <p class="section-title">ChatGPT</p>
+          <label for="chatgpt_prompt">Prompt para generación de mensajes</label>
+          <textarea id="chatgpt_prompt" rows="8" class="chatgpt-prompt-ta" placeholder="Instrucciones para que la IA genere mensajes personalizados. Ej: Eres un experto en marketing digital. Escribe un mensaje breve y cálido para contactar a {username}, presentado como {rubro}. Ofrece colaboración o ideas para mejorar su presencia en Instagram. No seas técnico."></textarea>
+          <p class="hint">Variables: <code>{username}</code> <code>{rubro}</code> <code>{followers}</code> <code>{followers_count}</code> <code>{following}</code> <code>{followings}</code> <code>{posts}</code> <code>{posts_count}</code> <code>{bio}</code> <code>{engagement_score}</code> <code>{success_score}</code> <code>{avg_views}</code> <code>{verified}</code> <code>{private}</code> <code>{is_verified}</code> <code>{is_private}</code></p>
         </div>
 
         <div class="section">

@@ -55,11 +55,17 @@ class MessageComposerPort(Protocol):
     Admite un contexto flexible y un ID de plantilla opcional.
     """
 
-    def compose_message(self, ctx: Mapping[str, Any] | object, template_id: Optional[str] = None) -> str:
+    def compose_message(
+        self,
+        ctx: Mapping[str, Any] | object,
+        template_id: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+    ) -> str:
         """
         Genera el texto del mensaje según el contexto.
         - ctx: objeto o dict con atributos del perfil (username, rubro, followers, etc.)
         - template_id: identificador opcional de estilo o template
+        - custom_prompt: instrucciones personalizadas del cliente (reemplaza el prompt por defecto)
         Debe devolver un string no vacío.
         """
         ...

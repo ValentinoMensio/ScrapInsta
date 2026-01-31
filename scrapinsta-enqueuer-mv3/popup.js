@@ -17,6 +17,7 @@ function loadSettings() {
         x_client_id: "",
         client_id: "",
         default_limit: 50,
+        chatgpt_prompt: "",
         use_jwt: false,
         jwt_token: "",
         jwt_expires_at: 0,
@@ -463,6 +464,14 @@ function stopAutoRefresh() {
 let selectedSendJobId = null;
 let selectedSendKind = null; // "fetch_followings" | "analyze_profile"
 let selectedSendUsernames = [];
+let sendPendingCount = 0;
+
+function setEnqueueSendEnabled(enabled, reason = "") {
+  const btn = $("#enqueue_send");
+  if (!btn) return;
+  btn.disabled = !enabled;
+  btn.title = !enabled && reason ? reason : "";
+}
 
 function setSendStatus(msg, isErr = false) {
   const el = $("#send_status");
@@ -509,6 +518,16 @@ function updateSendJobProgress(stats) {
     statusText = total > 0 ? "Esperando..." : "—";
   }
   if (textEl) textEl.textContent = statusText;
+
+  // Desactivar encolado si hay envío en curso
+  const inFlight = queued + sent > 0;
+  if (inFlight) {
+    setEnqueueSendEnabled(false, "Envío en curso. Esperá a que termine.");
+  } else if (sendPendingCount > 0) {
+    setEnqueueSendEnabled(true);
+  } else {
+    setEnqueueSendEnabled(false, "No hay pendientes para encolar.");
+  }
 }
 
 async function refreshSendJobProgress() {
@@ -681,7 +700,14 @@ async function onSendRecipientsJobChange(jobIdOrNull, kindOrNull) {
     const infoEl = $("#send_recipients_info");
     if (summaryEl) summaryEl.textContent = `${total} ${label} · ${already} ya enviados · ${pending} pendientes`;
     if (infoEl) infoEl.style.display = "block";
-    setSendStatus(pending > 0 ? `Listo: ${pending} pendientes de recibir mensaje` : "Todos ya recibieron mensaje.");
+  sendPendingCount = pending || 0;
+  if (sendPendingCount > 0) {
+    setSendStatus(`Listo: ${sendPendingCount} pendientes de recibir mensaje`);
+    setEnqueueSendEnabled(true);
+  } else {
+    setSendStatus("No hay pendientes para encolar.");
+    setEnqueueSendEnabled(false, "No hay pendientes para encolar.");
+  }
   } catch (e) {
     console.error("[onSendRecipientsJobChange]", e);
     setSendStatus("Error al cargar destinatarios", true);
@@ -696,10 +722,17 @@ async function enqueueSendMessages() {
     return setSendStatus("Elige un job (followings o análisis) primero.", true);
   }
 
+  const useChatgpt = $("#use_chatgpt") ? $("#use_chatgpt").checked : false;
   const message = $("#send_message").value.trim();
-  if (!message) return setSendStatus("Escribe un mensaje.", true);
-  if (message.length < 10) return setSendStatus("El mensaje es muy corto (mínimo 10 caracteres).", true);
-  if (message.length > 1000) return setSendStatus("El mensaje es muy largo (máximo 1000 caracteres).", true);
+
+  if (!useChatgpt) {
+    if (!message) return setSendStatus("Escribe un mensaje o activá ChatGPT.", true);
+    if (message.length < 10) return setSendStatus("El mensaje es muy corto (mínimo 10 caracteres).", true);
+    if (message.length > 1000) return setSendStatus("El mensaje es muy largo (máximo 1000 caracteres).", true);
+  } else {
+    const prompt = (cfg.chatgpt_prompt || "").trim();
+    if (!prompt) return setSendStatus("Configurá el prompt de ChatGPT en Opciones.", true);
+  }
 
   const dryRun = $("#dry_run") ? $("#dry_run").checked : true;
   if (!dryRun) {
@@ -708,18 +741,23 @@ async function enqueueSendMessages() {
 
   const headers = await getAuthHeaders(cfg);
   const url = new URL("/ext/send/enqueue", cfg.api_base).toString();
-  setSendStatus("Encolando mensajes (solo pendientes)...");
+  setSendStatus(useChatgpt ? "Encolando (generación con ChatGPT)..." : "Encolando mensajes (solo pendientes)...");
+  setEnqueueSendEnabled(false, "Encolando...");
+
+  const body = {
+    usernames: selectedSendUsernames,
+    message_template: message || "",  // vacío si use_ai (backend lo ignora)
+    source_job_id: selectedSendJobId,
+    dry_run: dryRun,
+    use_ai: useChatgpt,
+    client_prompt: useChatgpt ? (cfg.chatgpt_prompt || "").trim() : undefined,
+  };
 
   try {
     const resp = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        usernames: selectedSendUsernames,
-        message_template: message,
-        source_job_id: selectedSendJobId,
-        dry_run: dryRun,
-      }),
+      body: JSON.stringify(body),
     });
 
     const text = await resp.text();
@@ -728,7 +766,14 @@ async function enqueueSendMessages() {
 
     if (!resp.ok) {
       console.error("[enqueue send] HTTP", resp.status, data);
-      return setSendStatus(`Error ${resp.status}: ${data?.detail || text}`, true);
+      const apiMsg = data?.error?.message || data?.detail || data?.message || text;
+      if (resp.status === 400 && (apiMsg || "").toLowerCase().includes("ya recibieron mensaje")) {
+        setSendStatus("No hay pendientes: ya fueron enviados o están en cola.");
+        setEnqueueSendEnabled(false, "No hay pendientes para encolar.");
+        return;
+      }
+      setEnqueueSendEnabled(sendPendingCount > 0);
+      return setSendStatus(`Error ${resp.status}: ${apiMsg}`, true);
     }
 
     const jobId = data?.job_id || "(sin id)";
@@ -747,6 +792,7 @@ async function enqueueSendMessages() {
   } catch (e) {
     console.error("[enqueue send] Error:", e);
     setSendStatus("Error de red. Verifica la conexión.", true);
+    setEnqueueSendEnabled(sendPendingCount > 0);
   }
 }
 
@@ -781,6 +827,9 @@ async function updateSenderStatus() {
 
 async function startSender() {
   try {
+    if (sendPendingCount > 0) {
+      await enqueueSendMessages();
+    }
     setSendStatus("Iniciando sender...");
     const result = await chrome.runtime.sendMessage({ action: 'start_sender' });
     if (result?.status === 'started') {
@@ -937,12 +986,31 @@ async function main() {
   
   // Tab 2: Send DMs
   const sendMessageInput = $("#send_message");
-  if (sendMessageInput) {
-    sendMessageInput.addEventListener("input", () => {
-      const count = sendMessageInput.value.length;
-      if ($("#message_char_count")) $("#message_char_count").textContent = count;
-    });
+  const useChatgptCheckbox = $("#use_chatgpt");
+  const sendMessageHint = $("#send_message_hint");
+  const sendMessageLabel = $("#send_message_label");
+
+  function updateMessageHint() {
+    const useChatgpt = useChatgptCheckbox ? useChatgptCheckbox.checked : false;
+    const count = sendMessageInput ? sendMessageInput.value.length : 0;
+    if ($("#message_char_count")) $("#message_char_count").textContent = count;
+    if (sendMessageInput) {
+      sendMessageInput.placeholder = useChatgpt
+        ? "Opcional: instrucciones adicionales o prefijo para combinar con ChatGPT."
+        : "Hola! Me gustaría contactarte...";
+    }
+    if (sendMessageHint) {
+      sendMessageHint.textContent = `Caracteres: ${count}/1000`;
+    }
   }
+
+  if (sendMessageInput) {
+    sendMessageInput.addEventListener("input", updateMessageHint);
+  }
+  if (useChatgptCheckbox) {
+    useChatgptCheckbox.addEventListener("change", updateMessageHint);
+  }
+  updateMessageHint();
   
   const sendRecipientsSelect = $("#send_recipients_job_select");
   if (sendRecipientsSelect) {

@@ -35,8 +35,8 @@ def _to_dict(ctx: Mapping[str, Any] | object) -> Dict[str, Any]:
 
 def _ctx_to_legacy_profile_dict(d: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Mapea el contexto actual a las claves que usaba tu función original:
-    followers_count, posts_count, avg_views, engagement_score, success_score, rubro, username.
+    Mapea el contexto a formato legacy + variables extendidas.
+    Incluye: bio, following, verified, private para sustitución en prompts.
     """
     return {
         "username": d.get("username") or "",
@@ -44,8 +44,15 @@ def _ctx_to_legacy_profile_dict(d: Dict[str, Any]) -> Dict[str, Any]:
         "engagement_score": d.get("engagement_score") or 0,
         "success_score": d.get("success_score") or 0,
         "followers_count": d.get("followers") or 0,
+        "followers": d.get("followers") or 0,
         "avg_views": d.get("avg_views") or 0,
         "posts_count": d.get("posts") or 0,
+        "posts": d.get("posts") or 0,
+        "bio": d.get("bio") or "",
+        "following": d.get("following") or d.get("followings") or 0,
+        "followings": d.get("following") or d.get("followings") or 0,
+        "verified": d.get("verified"),
+        "private": d.get("private"),
     }
 
 
@@ -65,17 +72,21 @@ class OpenAIMessageComposer(MessageComposerPort):
         max_tokens: Optional[int] = None,
     ) -> None:
         s = Settings()
-        self.client = client or OpenAI(api_key=s.OPENAI_API_KEY)
-        self.model = model or (getattr(s, "OPENAI_MODEL", None) or "gpt-4.1-nano")
-        self.temperature = float(temperature if temperature is not None else getattr(s, "OPENAI_TEMPERATURE", 0.7))
-        self.max_tokens = int(max_tokens if max_tokens is not None else getattr(s, "OPENAI_MAX_TOKENS", 100))
+        self.client = client or OpenAI(api_key=s.openai_api_key or "")
+        self.model = model or (s.openai_model or "gpt-4o-mini")
+        self.temperature = float(temperature if temperature is not None else 0.7)
+        self.max_tokens = int(max_tokens if max_tokens is not None else 100)
 
-    def compose_message(self, ctx: Mapping[str, Any] | object, template_id: Optional[str] = None) -> str:
+    def compose_message(
+        self,
+        ctx: Mapping[str, Any] | object,
+        template_id: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+    ) -> str:
         # 1) adaptar contexto al formato “profile” legado
         d = _to_dict(ctx)
         profile = _ctx_to_legacy_profile_dict(d)
 
-        # 2) prompt 1:1 del proyecto viejo (mantenemos el texto y el sistema)
         username = profile.get("username", "tu perfil")
         rubro = profile.get("rubro", "profesional")
         engagement_score = profile.get("engagement_score", 0)
@@ -84,7 +95,37 @@ class OpenAIMessageComposer(MessageComposerPort):
         avg_views = profile.get("avg_views", 0)
         posts_count = profile.get("posts_count", 0)
 
-        prompt = f"""
+        if custom_prompt and custom_prompt.strip():
+            # Sustituir variables en el prompt del cliente
+            bio = profile.get("bio") or ""
+            following = profile.get("following") or profile.get("followings") or 0
+            verified = profile.get("verified")
+            private = profile.get("private")
+            verified_str = "sí" if verified else "no"
+            private_str = "sí" if private else "no"
+
+            prompt = (
+                custom_prompt.strip()
+                .replace("{username}", str(username))
+                .replace("{rubro}", str(rubro))
+                .replace("{followers}", str(followers_count))
+                .replace("{followers_count}", str(followers_count))
+                .replace("{following}", str(following))
+                .replace("{followings}", str(following))
+                .replace("{posts}", str(posts_count))
+                .replace("{posts_count}", str(posts_count))
+                .replace("{bio}", str(bio))
+                .replace("{engagement_score}", str(engagement_score))
+                .replace("{success_score}", str(success_score))
+                .replace("{avg_views}", str(avg_views))
+                .replace("{verified}", verified_str)
+                .replace("{private}", private_str)
+                .replace("{is_verified}", verified_str)
+                .replace("{is_private}", private_str)
+            )
+            prompt += f"\n\nDatos del perfil: Seguidores={followers_count}, Publicaciones={posts_count}, Engagement={engagement_score}, Success={success_score}. Redacta solo el mensaje final, breve y personal."
+        else:
+            prompt = f"""
         Eres un experto en marketing digital enfocado en ayudar a profesionales a mejorar su presencia en Instagram.
 
         Vas a redactar un mensaje breve, cálido y profesional para contactar al perfil {username}, que se presenta como {rubro}.

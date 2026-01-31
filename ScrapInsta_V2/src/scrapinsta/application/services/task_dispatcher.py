@@ -36,7 +36,11 @@ def _parse_analyze(payload: Dict[str, Any]) -> AnalyzeProfileRequest:
     return AnalyzeProfileRequest(**payload)
 
 def _parse_send_message(payload: Dict[str, Any]) -> MessageRequest:
-    return MessageRequest(**payload)
+    # Compatibilidad: payload usa message_template, MessageRequest usa message_text
+    p = dict(payload)
+    if "message_template" in p and "message_text" not in p:
+        p["message_text"] = p.get("message_template")
+    return MessageRequest(**p)
 
 def _parse_fetch_followings(payload: Dict[str, Any]) -> FetchFollowingsRequest:
     return FetchFollowingsRequest(**payload)

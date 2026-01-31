@@ -21,6 +21,7 @@ const CONFIG = {
 // =====================================================
 let state = {
   isRunning: false,
+  isProcessing: false,
   currentTask: null,
   dmsSentThisSession: 0,
   lastDMTime: 0,
@@ -311,92 +312,102 @@ async function sendDMViaContentScript(username, message, dryRun = true) {
 
 async function processNextTask() {
   await loadState();
-  
-  if (!state.isRunning) {
-    console.log('[BG] Sender no está corriendo');
+
+  if (state.isProcessing) {
+    console.log('[BG] Ya hay un envío en curso, esperando...');
     return;
   }
+  state.isProcessing = true;
   
-  // Verificar límite de sesión
-  if (state.dmsSentThisSession >= CONFIG.maxDMsPerSession) {
-    console.log('[BG] Límite de sesión alcanzado');
-    await stopSender('session_limit');
-    return;
-  }
-  
-  // Verificar timing
-  const now = Date.now();
-  if (state.nextDMTime > now) {
-    console.log(`[BG] Esperando... próximo DM en ${Math.round((state.nextDMTime - now) / 1000)}s`);
-    return;
-  }
-  
-  // Obtener tarea
-  console.log('[BG] Pulling task...');
-  const task = await pullTask();
-  
-  if (!task) {
-    console.log('[BG] No hay tareas pendientes');
-    await stopSender('no_tasks');
-    return;
-  }
-  
-  console.log('[BG] Task obtenida:', task);
-  state.currentTask = task;
-  
-  // Extraer datos
-  const username = task.dest_username || task.payload?.target_username;
-  const message = task.payload?.message_template || task.payload?.message || 'Hola!';
-  const dryRun = task.payload?.dry_run !== false;  // Por defecto dry_run = true
-  
-  if (!username) {
-    console.error('[BG] Task sin username');
-    await reportResult(task.job_id, task.task_id, false, null, 'missing_username');
-    return;
-  }
-  
-  // Ejecutar envío
-  console.log(`[BG] Ejecutando DM a ${username} (dryRun: ${dryRun})`);
-  const result = await sendDMViaContentScript(username, message, dryRun);
-  
-  // Reportar resultado
-  await reportResult(task.job_id, task.task_id, result.success, username, result.error);
-
-  // Actualizar estado
-  state.dmsSentThisSession++;
-  state.lastDMTime = Date.now();
-  if (dryRun) {
-    state.nextDMTime = Date.now() + 5000;
-  } else {
-    state.nextDMTime = Date.now() + randomBetween(CONFIG.minDelayBetweenDMs, CONFIG.maxDelayBetweenDMs);
-  }
-  state.currentTask = null;
-
-  await saveState({
-    dm_sender_session_count: state.dmsSentThisSession,
-    dm_sender_last_time: state.lastDMTime,
-    dm_sender_next_time: state.nextDMTime,
-  });
-
-  // Notificar al popup
-  chrome.runtime.sendMessage({
-    type: 'dm_status_update',
-    data: {
-      lastUsername: username,
-      success: result.success,
-      sessionCount: state.dmsSentThisSession,
-      nextDMTime: state.nextDMTime,
-    },
-  }).catch(() => {});
-
-  if (dryRun) {
-    console.log(`[BG] Dry-run OK para ${username}. Siguiente usuario en 5 s.`);
-  } else {
-    console.log(`[BG] DM ${result.success ? 'exitoso' : 'fallido'} a ${username}. Próximo en ${Math.round((state.nextDMTime - Date.now()) / 60000)} minutos`);
-  }
-
-  if (dryRun && state.isRunning) {
-    setTimeout(() => processNextTask(), 5000);
+  try {
+    if (!state.isRunning) {
+      console.log('[BG] Sender no está corriendo');
+      return;
+    }
+    
+    // Verificar límite de sesión
+    if (state.dmsSentThisSession >= CONFIG.maxDMsPerSession) {
+      console.log('[BG] Límite de sesión alcanzado');
+      await stopSender('session_limit');
+      return;
+    }
+    
+    // Verificar timing
+    const now = Date.now();
+    if (state.nextDMTime > now) {
+      console.log(`[BG] Esperando... próximo DM en ${Math.round((state.nextDMTime - now) / 1000)}s`);
+      return;
+    }
+    
+    // Obtener tarea
+    console.log('[BG] Pulling task...');
+    const task = await pullTask();
+    
+    if (!task) {
+      console.log('[BG] No hay tareas pendientes');
+      await stopSender('no_tasks');
+      return;
+    }
+    
+    console.log('[BG] Task obtenida:', task);
+    state.currentTask = task;
+    
+    // Extraer datos
+    const username = task.dest_username || task.payload?.target_username;
+    const message = task.payload?.message_template || task.payload?.message || 'Hola!';
+    const dryRun = task.payload?.dry_run !== false;  // Por defecto dry_run = true
+    
+    if (!username) {
+      console.error('[BG] Task sin username');
+      await reportResult(task.job_id, task.task_id, false, null, 'missing_username');
+      return;
+    }
+    
+    // Ejecutar envío
+    console.log(`[BG] Ejecutando DM a ${username} (dryRun: ${dryRun})`);
+    const result = await sendDMViaContentScript(username, message, dryRun);
+    
+    // Reportar resultado
+    await reportResult(task.job_id, task.task_id, result.success, username, result.error);
+   
+    // Actualizar estado
+    state.dmsSentThisSession++;
+    state.lastDMTime = Date.now();
+    if (dryRun) {
+      state.nextDMTime = Date.now() + 5000;
+    } else {
+      state.nextDMTime = Date.now() + randomBetween(CONFIG.minDelayBetweenDMs, CONFIG.maxDelayBetweenDMs);
+    }
+    state.currentTask = null;
+   
+    await saveState({
+      dm_sender_session_count: state.dmsSentThisSession,
+      dm_sender_last_time: state.lastDMTime,
+      dm_sender_next_time: state.nextDMTime,
+    });
+   
+    // Notificar al popup
+    chrome.runtime.sendMessage({
+      type: 'dm_status_update',
+      data: {
+        lastUsername: username,
+        success: result.success,
+        sessionCount: state.dmsSentThisSession,
+        nextDMTime: state.nextDMTime,
+      },
+    }).catch(() => {});
+   
+    if (dryRun) {
+      console.log(`[BG] Dry-run OK para ${username}. Siguiente usuario en 5 s.`);
+    } else {
+      console.log(`[BG] DM ${result.success ? 'exitoso' : 'fallido'} a ${username}. Próximo en ${Math.round((state.nextDMTime - Date.now()) / 60000)} minutos`);
+    }
+   
+    if (dryRun && state.isRunning) {
+      setTimeout(() => processNextTask(), 5000);
+    }
+  } finally {
+    state.isProcessing = false;
   }
 }
 
@@ -432,6 +443,7 @@ async function stopSender(reason = 'manual') {
   console.log('[BG] Deteniendo sender, razón:', reason);
   
   state.isRunning = false;
+  state.isProcessing = false;
   state.currentTask = null;
   
   await saveState({
